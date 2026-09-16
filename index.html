@@ -151,6 +151,22 @@
   .confirm-item button.picked { background: var(--gold); color: #1a1d29; font-weight: 700; }
   #confirmSubmit { background: var(--ok); color: #062c18; font-weight: 700; }
 
+  .debug-canvas {
+    width: 100%;
+    border-radius: 8px;
+    background: #000;
+    border: 1px solid #3a3f55;
+  }
+
+  .pick-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; max-height: 180px; overflow-y: auto; }
+  .pick-grid button {
+    font-size: .72rem;
+    padding: 4px 7px;
+    border-radius: 5px;
+    background: var(--panel-light);
+  }
+  .pick-grid button:hover { background: var(--gold); color: #1a1d29; }
+
   .counters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 
   .counter {
@@ -444,11 +460,13 @@
         <div class="region-box" id="regionBox"></div>
       </div>
       <div class="modal-hint">
-        1. Dela Jawaker-fönstret när webbläsaren frågar. &nbsp;2. Dra en ruta runt området där spelade kort ligger (mitten av bordet). &nbsp;3. Under spelet: tryck <b>F5</b> eller knappen "Scanna" efter varje stick.
+        1. Dela Jawaker-fönstret när webbläsaren frågar. &nbsp;2. Dra en ruta runt området där spelade kort ligger. &nbsp;3. Under spelet: tryck <b>F5</b> efter ett spelat kort (eller knappen "Scanna") så bokas kortet av automatiskt.
       </div>
+      <canvas id="debugCanvas" class="debug-canvas" hidden></canvas>
       <div class="modal-actions">
         <button id="drawRegionBtn" class="active">Rita ruta</button>
-        <button id="scanBtn" title="Scanna stick (F5)">Scanna stick (F5)</button>
+        <button id="scanBtn" title="Scanna kort (F5)">Scanna (F5)</button>
+        <button id="debugBtn" title="Visa exakt vad appen ser">Visa bild</button>
         <button id="stopAutoBtn">Stoppa auto</button>
         <button id="regionResetBtn">Rensa ruta</button>
         <span style="margin-left:auto; color:var(--muted); font-size:.78rem" id="scanResult"></span>
@@ -461,8 +479,9 @@
       <div class="modal-head">
         <span class="modal-title">Bekräfta kort i sticket</span>
       </div>
-      <div class="modal-hint">Appen var osäker på några kort. Välj rätt kort (eller "Hoppa över") för varje.</div>
+      <div class="modal-hint">Appen var osäker på några kort. Välj rätt kort (eller hoppa över) för varje – osäkra kort kan väljas direkt i kortleken nedan.</div>
       <div class="confirm-preview" id="confirmPreview"></div>
+      <div class="pick-grid" id="confirmPick"></div>
       <div class="modal-actions">
         <button id="confirmSubmit">Markera markerade ()</button>
         <button id="confirmCancel">Hoppa över detta stick</button>
@@ -754,7 +773,7 @@
     update();
   }
 
-  // ---- Auto: skärmavläsning (Jawaker) ----
+// ---- Auto: skärmavläsning (Jawaker) ----
   const autoEl = {
     modal: document.getElementById('autoModal'),
     video: document.getElementById('screenVideo'),
@@ -762,12 +781,15 @@
     box: document.getElementById('regionBox'),
     status: document.getElementById('autoStatus'),
     scanBtn: document.getElementById('scanBtn'),
+    debugBtn: document.getElementById('debugBtn'),
     stopBtn: document.getElementById('stopAutoBtn'),
     drawBtn: document.getElementById('drawRegionBtn'),
     resetBtn: document.getElementById('regionResetBtn'),
     result: document.getElementById('scanResult'),
+    debugCanvas: document.getElementById('debugCanvas'),
     confirmDlg: document.getElementById('confirmDlg'),
     confirmPreview: document.getElementById('confirmPreview'),
+    confirmPick: document.getElementById('confirmPick'),
     confirmSubmit: document.getElementById('confirmSubmit'),
     confirmCancel: document.getElementById('confirmCancel'),
   };
@@ -775,22 +797,29 @@
 
   let screenStream = null;
   let autoActive = false;
-  let region = null;                 // normalized 0..1 {x,y,w,h}
-  let drawState = null;              // drag in progress
-  let tesseractLoaded = false;
-  let confirmItems = [];
+  let region = null;
+  let drawState = null;
+  let pendingCrops = [];
+  const TW = 40, TH = 52;
+  const STD_RANKS = ['A', 'K', 'Q', 'J', '10', '9', '8', '7', '6', '5', '4', '3', '2'];
+  const ourRank = (std) => std === 'A' ? 'Ess' : std === 'Q' ? 'D' : std === 'J' ? 'Kn' : std;
 
-  function setRegionBox(box, r) {
-    if (!r) { box.style.display = 'none'; return; }
-    box.style.display = 'block';
-    box.style.left = (r.x * 100) + '%';
-    box.style.top = (r.y * 100) + '%';
-    box.style.width = (r.w * 100) + '%';
-    box.style.height = (r.h * 100) + '%';
+  function videoRect() { return autoEl.video.getBoundingClientRect(); }
+
+  function setRegionBox(r) {
+    if (!r) { autoEl.box.style.display = 'none'; return; }
+    const vr = videoRect();
+    const wr = autoEl.wrap.getBoundingClientRect();
+    autoEl.box.style.display = 'block';
+    autoEl.box.style.left = (vr.left - wr.left + r.x * vr.width) + 'px';
+    autoEl.box.style.top = (vr.top - wr.top + r.y * vr.height) + 'px';
+    autoEl.box.style.width = (r.w * vr.width) + 'px';
+    autoEl.box.style.height = (r.h * vr.height) + 'px';
   }
+
   function loadRegion() {
     try { region = JSON.parse(localStorage.getItem(STORE_KEY + ':region') || 'null'); } catch (e) { region = null; }
-    setRegionBox(autoEl.box, region);
+    setRegionBox(region);
   }
   function saveRegion() {
     if (region) try { localStorage.setItem(STORE_KEY + ':region', JSON.stringify(region)); } catch (e) {}
@@ -798,7 +827,7 @@
 
   async function startAuto() {
     if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-      alert('Auto-läge kräver https:// eller localhost (lösen skärmdelning blockeras av webbläsaren). Öppna appen på https://mohamadnour19.github.io/trix-card-tracker/ eller via en lokal server.');
+      alert('Auto-läge kräver https:// eller localhost. Öppna appen på https://mohamadnour19.github.io/trix-card-tracker/ eller via en lokal server.');
       return;
     }
     try {
@@ -823,37 +852,39 @@
     autoEl.confirmDlg.classList.remove('open');
   }
 
-  // --- Region drawing ---
-  function wrapEventPos(e) {
-    const rect = autoEl.wrap.getBoundingClientRect();
-    return { nx: (e.clientX - rect.left) / rect.width, ny: (e.clientY - rect.top) / rect.height };
-  }
+  // --- Region drawing (relativ till videon, så rutan träffar rätt) ---
   function drawStart(e) {
     if (!autoEl.drawBtn.classList.contains('active')) return;
-    const p = wrapEventPos(e);
-    drawState = { x: p.nx, y: p.ny, ex: p.nx, ey: p.ny };
-    autoEl.box.style.display = 'block';
+    const vr = videoRect();
+    drawState = {
+      x: (e.clientX - vr.left) / vr.width,
+      y: (e.clientY - vr.top) / vr.height,
+      ex: (e.clientX - vr.left) / vr.width,
+      ey: (e.clientY - vr.top) / vr.height,
+    };
+    setRegionBox({ x: drawState.x, y: drawState.y, w: 0, h: 0 });
   }
   function drawMove(e) {
     if (!drawState) return;
-    const p = wrapEventPos(e);
-    drawState.ex = p.nx; drawState.ey = p.ny;
-    const rx = Math.min(drawState.x, drawState.ex), ry = Math.min(drawState.y, drawState.ey);
-    setRegionBox(autoEl.box, { x: rx, y: ry, w: Math.abs(drawState.ex - drawState.x), h: Math.abs(drawState.ey - drawState.y) });
+    const vr = videoRect();
+    drawState.ex = (e.clientX - vr.left) / vr.width;
+    drawState.ey = (e.clientY - vr.top) / vr.height;
+    const x = Math.min(drawState.x, drawState.ex), y = Math.min(drawState.y, drawState.ey);
+    setRegionBox({ x, y, w: Math.abs(drawState.ex - drawState.x), h: Math.abs(drawState.ey - drawState.y) });
   }
   function drawEnd(e) {
     if (!drawState) return;
     drawMove(e);
-    const rx = Math.min(drawState.x, drawState.ex), ry = Math.min(drawState.y, drawState.ey);
+    const x = Math.min(drawState.x, drawState.ex), y = Math.min(drawState.y, drawState.ey);
     const w = Math.abs(drawState.ex - drawState.x), h = Math.abs(drawState.ey - drawState.y);
     drawState = null;
-    if (w < 0.02 || h < 0.02) { autoEl.box.style.display = 'none'; return; }
-    region = { x: rx, y: ry, w, h };
+    if (w < 0.02 || h < 0.02) { setRegionBox(null); return; }
+    region = { x, y, w, h };
     saveRegion();
-    setRegionBox(autoEl.box, region);
+    setRegionBox(region);
   }
 
-  // --- Frame + detection ----
+  // --- Frame capture ---
   function grabFrame() {
     const v = autoEl.video;
     if (!v.videoWidth || !region) return null;
@@ -861,124 +892,186 @@
     c.width = v.videoWidth; c.height = v.videoHeight;
     c.getContext('2d').drawImage(v, 0, 0);
     const r = region;
-    const crop = { x: r.x * c.width, y: r.y * c.height, w: r.w * c.width, h: r.h * c.height };
-    return { canvas: c, crop };
+    return {
+      canvas: c,
+      crop: { x: r.x * c.width, y: r.y * c.height, w: r.w * c.width, h: r.h * c.height },
+    };
   }
 
-  function detectCards(src, crop) {
-    const scale = 480 / Math.max(1, crop.w);
-    const cw = Math.max(2, Math.round(crop.w * scale));
-    const ch = Math.max(2, Math.round(crop.h * scale));
+  // --- Detection: senaste (fullt synliga) kortet ---
+  function brightMask(src, crop) {
+    const scale = 420 / Math.max(1, crop.w);
+    const cw = Math.max(40, Math.round(crop.w * scale));
+    const ch = Math.max(30, Math.round(crop.h * scale));
     const work = document.createElement('canvas');
     work.width = cw; work.height = ch;
     const wctx = work.getContext('2d');
     wctx.drawImage(src, crop.x, crop.y, crop.w, crop.h, 0, 0, cw, ch);
     const img = wctx.getImageData(0, 0, cw, ch);
     const d = img.data;
-
-    let sum = 0;
-    for (let i = 0; i < d.length; i += 4) sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-    const thr = Math.max(160, sum / (cw * ch));
-
-    const colCount = new Array(cw).fill(0);
-    for (let y = 0; y < ch; y++) {
-      for (let x = 0; x < cw; x++) {
-        const i = (y * cw + x) * 4;
-        if (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] > thr) colCount[x]++;
-      }
+    const gray = new Float32Array(cw * ch);
+    for (let i = 0; i < gray.length; i++) {
+      gray[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
     }
-
-    const minCol = ch * 0.22;
-    const bands = [];
-    let x = 0;
-    while (x < cw) {
-      if (colCount[x] > minCol) {
-        const x0 = x;
-        while (x < cw && colCount[x] > minCol) x++;
-        if (x - x0 >= cw * 0.05) bands.push([x0, x]);
-      } else x++;
+    const bg = document.createElement('canvas');
+    bg.width = cw; bg.height = ch;
+    const bctx = bg.getContext('2d');
+    bctx.filter = 'blur(18px)';
+    bctx.drawImage(work, 0, 0);
+    const bgData = bctx.getImageData(0, 0, cw, ch).data;
+    const mask = new Uint8Array(cw * ch);
+    for (let i = 0; i < gray.length; i++) {
+      const bgv = 0.299 * bgData[i * 4] + 0.587 * bgData[i * 4 + 1] + 0.114 * bgData[i * 4 + 2];
+      if (gray[i] > 120 && gray[i] > bgv + 24) mask[i] = 1;
     }
+    return { mask, cw, ch, scale };
+  }
 
-    const cards = [];
-    for (const [x0, x1] of bands) {
-      let y0 = ch, y1 = -1;
+  function topBottomEdges(mask, cw, ch) {
+    const top = new Int16Array(cw).fill(ch);
+    const bot = new Int16Array(cw).fill(-1);
+    for (let x = 0; x < cw; x++) {
       for (let y = 0; y < ch; y++) {
-        let cnt = 0;
-        for (let bx = x0; bx < x1; bx++) {
-          const i = (y * cw + bx) * 4;
-          if (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] > thr) cnt++;
-        }
-        if (cnt / (x1 - x0) > 0.16) { if (y < y0) y0 = y; if (y > y1) y1 = y; }
+        if (mask[y * cw + x]) { if (y < top[x]) top[x] = y; if (y > bot[x]) bot[x] = y; }
       }
-      if (y0 >= y1) continue;
-      const bw = x1 - x0, bh = y1 - y0;
-      const ar = bw / bh;
-      if (ar < 0.42 || ar > 1.05) continue;
-      if (bh < ch * 0.18 || bw < cw * 0.05) continue;
-      cards.push({ x: crop.x + x0 / scale, y: crop.y + y0 / scale, w: bw / scale, h: bh / scale });
     }
-    cards.sort((a, b) => a.x - b.x);
-    return cards;
+    return { top, bot };
   }
 
-  function analyzeCorner(src, card) {
-    const cornerW = card.w * 0.4, cornerH = card.h * 0.36;
-    const cw = Math.max(28, Math.round(cornerW * 2));
-    const ch = Math.max(26, Math.round(cornerH * 2));
-    const c = document.createElement('canvas');
-    c.width = cw; c.height = ch;
-    const ctx = c.getContext('2d');
-    ctx.drawImage(src, card.x, card.y, cornerW, cornerH, 0, 0, cw, ch);
-    const d = ctx.getImageData(0, 0, cw, ch).data;
-    let redPx = 0, blackPx = 0;
-    for (let i = 0; i < d.length; i += 4) {
-      const r = d[i], g = d[i + 1], b = d[i + 2];
-      if (r > 140 && r > g + 45 && r > b + 45) redPx++;
-      else if (0.299 * r + 0.587 * g + 0.114 * b < 110 && r < 120) blackPx++;
+  function cardCandidate(mask, cw, ch, side) {
+    const { top, bot } = topBottomEdges(mask, cw, ch);
+    const dir = side === 'R' ? -1 : 1;
+    const start = side === 'R' ? cw - 1 : 0;
+    let xA = -1;
+    for (let x = start; x >= 0 && x < cw; x += dir) {
+      if (top[x] < ch) { xA = x; break; }
     }
-    const color = redPx > blackPx + 3 ? 'red' : blackPx > redPx ? 'black' : redPx > 0 ? 'red' : 'unknown';
-    return { canvas: c, color, hasRed: redPx, hasBlack: blackPx };
-  }
-
-  function loadTesseract() {
-    if (window.Tesseract) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
-      s.onload = resolve;
-      s.onerror = reject;
-      document.head.appendChild(s);
-    });
-  }
-
-  async function ocrRank(canvas) {
-    try {
-      const res = await Tesseract.recognize(canvas, 'eng', { logger: () => {} });
-      const txt = res.data.text || '';
-      const m = txt.match(/(10|[2-9]|A|K|Q|J)/i);
-      return m ? m[1].toUpperCase() : null;
-    } catch (e) { return null; }
-  }
-
-  function normRank(token) {
-    if (!token) return null;
-    const t = String(token).toUpperCase().trim();
-    if (t === 'A') return 'Ess';
-    if (t === 'K') return 'K';
-    if (t === 'Q') return 'D';
-    if (t === 'J') return 'Kn';
-    const n = parseInt(t, 10);
-    if (!isNaN(n) && n >= 2 && n <= 10) return String(n);
-    return null;
-  }
-
-  function remainingKeys(suitId) {
-    const out = [];
-    for (const rank of RANKS) {
-      const key = suitId + '-' + rank;
-      if (state.has(key) && !state.get(key)) out.push(key);
+    if (xA < 0) return null;
+    const yTop = top[xA];
+    const yBot = bot[xA];
+    let xEdge = xA;
+    for (let x = xA; x >= 0 && x < cw; x += dir) {
+      if (top[x] >= ch) break;
+      if (Math.abs(top[x] - yTop) <= 4) xEdge = x;
+      else break;
     }
+    const left = side === 'R' ? Math.min(xEdge, xA) : xA;
+    const right = side === 'R' ? xA : Math.max(xEdge, xA);
+    const bb = { x: left, y: yTop, w: right - left + 1, h: yBot - yTop + 1 };
+    let fill = 0;
+    for (let y = bb.y; y <= bb.y + bb.h && y < ch; y++)
+      for (let x = bb.x; x <= bb.x + bb.w && x < cw; x++)
+        if (mask[y * cw + x]) fill++;
+    bb.fill = fill / (bb.w * bb.h);
+    return bb;
+  }
+
+  function detectNewestCard(src, crop) {
+    const { mask, cw, ch, scale } = brightMask(src, crop);
+    const cR = cardCandidate(mask, cw, ch, 'R');
+    const cL = cardCandidate(mask, cw, ch, 'L');
+    let best = null;
+    if (cR && cL) best = cR.fill > cL.fill ? cR : cL;
+    else best = cR || cL;
+    if (!best || best.h < ch * 0.12 || best.w < cw * 0.05 || best.fill < 0.28) return null;
+    return { x: crop.x + best.x / scale, y: crop.y + best.y / scale, w: best.w / scale, h: best.h / scale, fill: best.fill };
+  }
+
+  // --- Hörnavläsning via glyph-template-matching (offline) ---
+  function inkBbox(mask, w, h) {
+    let x0 = w, y0 = h, x1 = -1, y1 = -1;
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++)
+        if (mask[y * w + x]) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    if (x1 < 0) return null;
+    return { x0, y0, x1, y1 };
+  }
+  function normalizeMask(mask, w, h) {
+    const bb = inkBbox(mask, w, h);
+    const out = new Uint8Array(TW * TH);
+    if (!bb) return out;
+    const bw = bb.x1 - bb.x0 + 1, bh = bb.y1 - bb.y0 + 1;
+    const s = Math.min(TW / bw, TH / bh);
+    const nw = Math.max(1, Math.round(bw * s)), nh = Math.max(1, Math.round(bh * s));
+    const ox = Math.floor((TW - nw) / 2), oy = Math.floor((TH - nh) / 2);
+    for (let y = 0; y < nh; y++)
+      for (let x = 0; x < nw; x++) {
+        const sx = bb.x0 + Math.round(x / s), sy = bb.y0 + Math.round(y / s);
+        if (sy < h && sx < w && mask[sy * w + sx]) out[(oy + y) * TW + (ox + x)] = 1;
+      }
     return out;
+  }
+  function iou(a, b) {
+    let inter = 0, union = 0;
+    for (let i = 0; i < TW * TH; i++) {
+      if (a[i] || b[i]) { union++; if (a[i] && b[i]) inter++; }
+    }
+    return union ? inter / union : 0;
+  }
+
+  let TEMPLATES = null;
+  function buildTemplates() {
+    if (TEMPLATES) return TEMPLATES;
+    const t = document.createElement('canvas');
+    const ctx = t.getContext('2d');
+    TEMPLATES = [];
+    for (const suit of SUITS) {
+      const color = suit.cls === 'red' ? '#d33a45' : '#000000';
+      for (const std of STD_RANKS) {
+        t.width = 48; t.height = 60;
+        ctx.clearRect(0, 0, 48, 60);
+        ctx.fillStyle = color;
+        ctx.font = '800 22px Arial, sans-serif';
+        ctx.textBaseline = 'top';
+        ctx.textAlign = 'left';
+        ctx.fillText(std, 2, 2);
+        ctx.font = '800 18px Arial, sans-serif';
+        ctx.fillText(suit.symbol, 2, 30);
+        const img = ctx.getImageData(0, 0, 48, 60).data;
+        const mask = new Uint8Array(48 * 60);
+        for (let i = 0; i < mask.length; i++) {
+          const r = img[i * 4], g = img[i * 4 + 1], b = img[i * 4 + 2];
+          if ((r > 150 && r > g + 40 && r > b + 40) || (r < 110 && g < 110 && b < 110)) mask[i] = 1;
+        }
+        TEMPLATES.push({ key: suit.id + '-' + ourRank(std), color, mask: normalizeMask(mask, 48, 60) });
+      }
+    }
+    return TEMPLATES;
+  }
+
+  function cornerQuery(src, card) {
+    const cornerW = card.w * 0.48, cornerH = card.h * 0.38;
+    const cw = Math.max(48, Math.round(cornerW * 2.2));
+    const chh = Math.max(48, Math.round(cornerH * 2.2));
+    const c = document.createElement('canvas');
+    c.width = cw; c.height = chh;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(src, card.x, card.y, cornerW, cornerH, 0, 0, cw, chh);
+    const img = ctx.getImageData(0, 0, cw, chh).data;
+    let redPx = 0, blackPx = 0;
+    const ink = new Uint8Array(cw * chh);
+    for (let i = 0; i < ink.length; i++) {
+      const r = img[i * 4], g = img[i * 4 + 1], b = img[i * 4 + 2];
+      const red = r > 140 && r > g + 40 && r > b + 40;
+      const dark = r < 130 && g < 130 && b < 130;
+      if (red) { redPx++; ink[i] = 1; }
+      else if (dark) { blackPx++; ink[i] = 1; }
+    }
+    if (!redPx && !blackPx) return null;
+    return { color: redPx >= blackPx ? 'red' : 'black', mask: normalizeMask(ink, cw, chh) };
+  }
+
+  function matchCorner(q) {
+    if (!q) return null;
+    buildTemplates();
+    let best = null;
+    for (const t of TEMPLATES) {
+      if (t.color !== q.color) continue;
+      if (state.has(t.key) && state.get(t.key)) continue;
+      const s = iou(q.mask, t.mask);
+      if (!best || s > best.score) best = { key: t.key, score: s };
+    }
+    return best && best.score >= 0.45 ? best : null;
   }
 
   function markCardPlayed(key) {
@@ -990,6 +1083,16 @@
     if (history.length > 200) history.shift();
   }
 
+  function remainingKeysList() {
+    const out = [];
+    for (const suit of SUITS)
+      for (const rank of RANKS) {
+        const k = suit.id + '-' + rank;
+        if (state.has(k) && !state.get(k)) out.push(k);
+      }
+    return out;
+  }
+
   function cropToDataURL(src, card) {
     const c = document.createElement('canvas');
     c.width = 132; c.height = 184;
@@ -997,7 +1100,73 @@
     return c.toDataURL('image/png');
   }
 
-  async function scanTrick() {
+  // --- Bekräfta-dialog: klicka rätt kort i kortleken ---
+  function openConfirmDialog(src, items) {
+    pendingCrops = items;
+    autoEl.confirmPreview.innerHTML = '';
+    autoEl.confirmPick.innerHTML = '';
+    autoEl.confirmDlg.classList.add('open');
+    autoEl.confirmSubmit.textContent = 'Klar';
+
+    const desc = document.createElement('div');
+    desc.className = 'modal-hint';
+    desc.textContent = 'Klicka rätt kort i kortleken nedan för varje bild ovan.';
+    autoEl.confirmPreview.appendChild(desc);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'confirm-preview';
+    items.forEach((it) => {
+      const img = document.createElement('img');
+      img.src = cropToDataURL(src, it.box);
+      wrap.appendChild(img);
+    });
+    autoEl.confirmPreview.appendChild(wrap);
+
+    remainingKeysList().forEach(key => {
+      const b = document.createElement('button');
+      const [sid, rank] = key.split('-');
+      const s = SUITS.find(x => x.id === sid);
+      b.textContent = `${rankShort(rank)} ${s.name}`;
+      b.addEventListener('click', () => {
+        markCardPlayed(key);
+        b.disabled = true;
+        b.style.opacity = '.35';
+        playClick();
+        updateCounters();
+        save();
+        const first = items.find(it => !it.done);
+        if (first) { first.done = true; }
+        const left = items.filter(it => !it.done).length;
+        autoEl.confirmSubmit.textContent = left ? `Klar (${left} kort kvar)` : 'Klar';
+      });
+      autoEl.confirmPick.appendChild(b);
+    });
+    items.forEach(it => { it.done = false; });
+  }
+
+  // --- Debug-visualisering ---
+  function drawDebug(frame, boxes, notes) {
+    const c = autoEl.debugCanvas;
+    c.width = frame.crop.w; c.height = frame.crop.h;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(frame.canvas, frame.crop.x, frame.crop.y, frame.crop.w, frame.crop.h, 0, 0, c.width, c.height);
+    ctx.strokeStyle = '#46b37a';
+    ctx.lineWidth = 3;
+    (boxes || []).forEach(b => {
+      const x = b.x - frame.crop.x, y = b.y - frame.crop.y;
+      ctx.strokeRect(x, y, b.w, b.h);
+      const note = notes && notes[b.key];
+      if (note) {
+        ctx.fillStyle = '#46b37a';
+        ctx.font = 'bold 20px Arial';
+        ctx.fillText(note, x + 4, Math.max(18, y - 8));
+      }
+    });
+    c.hidden = false;
+  }
+
+  // --- Scan ---
+  function doScan() {
     if (!autoActive) return;
     if (!region) { autoEl.status.textContent = 'Rita en ruta först'; return; }
     autoEl.scanBtn.disabled = true;
@@ -1005,139 +1174,74 @@
     const g = grabFrame();
     if (!g) { autoEl.scanBtn.disabled = false; autoEl.result.textContent = 'Ingen bild'; return; }
 
-    const cards = detectCards(g.canvas, g.crop);
-    if (!cards.length) { autoEl.scanBtn.disabled = false; autoEl.result.textContent = 'Inga kort hittade'; return; }
-
-    let ocrOk = true;
-    try { await loadTesseract(); } catch (e) { ocrOk = false; }
-
-    const dets = [];
-    for (const card of cards) {
-      const a = analyzeCorner(g.canvas, card);
-      let rank = null;
-      if (ocrOk) rank = normRank(await ocrRank(a.canvas));
-      dets.push({ box: card, color: a.color, rank });
+    const card = detectNewestCard(g.canvas, g.crop);
+    if (!card) {
+      autoEl.result.textContent = 'Inga kort hittade – rita ny ruta eller tryck Visa bild';
+      drawDebug(g, [], {});
+      autoEl.scanBtn.disabled = false;
+      return;
     }
 
-    const recs = dets.map(det => {
-      const cands = [];
-      if (det.rank) {
-        const suitIds = det.color === 'red' ? ['hearts', 'diamonds']
-          : det.color === 'black' ? ['spades', 'clubs']
-          : SUITS.map(s => s.id);
-        for (const sid of suitIds) {
-          const key = sid + '-' + det.rank;
-          if (state.has(key) && !state.get(key)) cands.push(key);
-        }
+    const q = cornerQuery(g.canvas, card);
+    const match = matchCorner(q);
+    const notes = {};
+    let msg = '';
+    if (match) {
+      const [sid, rank] = match.key.split('-');
+      card.key = match.key;
+      const sName = SUITS.find(s => s.id === sid).name;
+      if (state.get(match.key)) {
+        msg = `${rankShort(rank)} ${sName} var redan spelat`;
+      } else {
+        markCardPlayed(match.key);
+        updateCounters();
+        save();
+        playClick();
+        msg = `${rankShort(rank)} ${sName} markerad (${Math.round(match.score * 100)}%)`;
       }
-      return { det, cands };
-    });
-
-    const counts = {};
-    recs.forEach(r => r.cands.forEach(k => { counts[k] = (counts[k] || 0) + 1; }));
-
-    const confirmed = [];
-    const pending = [];
-    recs.forEach((r, j) => {
-      const unique = r.cands.filter(k => counts[k] === 1);
-      if (r.cands.length === 1 && counts[r.cands[0]] === 1) { confirmed.push(r.cands[0]); return; }
-      const chosen = unique.length === 1 ? unique[0] : null;
-      pending.push({ j, cands: r.cands, chosen });
-    });
-
-    confirmed.forEach(k => markCardPlayed(k));
-    updateCounters();
-    save();
-
-    if (pending.length) {
-      openConfirmDialog(g.canvas, pending);
+      notes[match.key] = msg;
     } else {
-      playClick();
-      autoEl.result.textContent = `${confirmed.length} kort markerade`;
+      card.key = '?';
+      notes['?'] = 'osäker – välj i dialogen';
+      msg = 'Osäkert kort – välj i dialogrutan';
+      openConfirmDialog(g.canvas, [{ box: card }]);
     }
+    autoEl.result.textContent = msg;
+    drawDebug(g, [card], notes);
     autoEl.scanBtn.disabled = false;
   }
 
-  function openConfirmDialog(src, pending) {
-    confirmItems = pending;
-    autoEl.confirmPreview.innerHTML = '';
-    autoEl.confirmDlg.classList.add('open');
-
-    pending.forEach((p) => {
-      const det = p.det;
-      const item = document.createElement('div');
-      item.className = 'confirm-item';
-
-      const img = document.createElement('img');
-      img.src = cropToDataURL(src, det.box);
-      img.alt = 'kort';
-
-      const choices = document.createElement('div');
-      choices.className = 'choices';
-
-      if (!p.cands.length) {
-        const skip = document.createElement('button');
-        skip.textContent = 'Okänt – hoppa över';
-        skip.addEventListener('click', () => {
-          p.chosen = null;
-          skip.classList.add('picked');
-          [...choices.children].forEach(b => b.classList.remove('picked'));
-        });
-        choices.appendChild(skip);
-      } else {
-        p.cands.forEach(key => {
-          const [sid, rank] = key.split('-');
-          const s = SUITS.find(x => x.id === sid);
-          const b = document.createElement('button');
-          b.textContent = `${rankShort(rank)} ${s.name}`;
-          b.addEventListener('click', () => {
-            p.chosen = key;
-            [...choices.children].forEach(x => x.classList.remove('picked'));
-            b.classList.add('picked');
-            updateConfirmSubmit();
-          });
-          if (p.chosen === key) b.classList.add('picked');
-          choices.appendChild(b);
-        });
-      }
-
-      item.appendChild(img);
-      item.appendChild(choices);
-      autoEl.confirmPreview.appendChild(item);
-    });
-    updateConfirmSubmit();
+  function showDebug() {
+    if (!autoActive) return;
+    const g = grabFrame();
+    if (!g) return;
+    const card = detectNewestCard(g.canvas, g.crop);
+    if (card) {
+      const q = cornerQuery(g.canvas, card);
+      const match = matchCorner(q);
+      card.key = match ? match.key : '?';
+      drawDebug(g, [card], { [card.key]: match ? `match ${Math.round(match.score * 100)}%` : 'ingen match' });
+      autoEl.result.textContent = `Ruta: ${Math.round(card.w)}x${Math.round(card.h)}px, fyllnad ${Math.round(card.fill * 100)}%`;
+    } else {
+      drawDebug(g, [], {});
+      autoEl.result.textContent = 'Inga kort i rutan – rita ny ruta eller förstora';
+    }
   }
-
-  function updateConfirmSubmit() {
-    const n = confirmItems.filter(p => p.chosen).length;
-    autoEl.confirmSubmit.textContent = `Markera markerade (${n})`;
-  }
-
-  autoEl.confirmSubmit.addEventListener('click', () => {
-    let n = 0;
-    confirmItems.forEach(p => { if (p.chosen) { markCardPlayed(p.chosen); n++; } });
-    updateCounters();
-    save();
-    autoEl.confirmDlg.classList.remove('open');
-    if (n) playClick();
-    autoEl.result.textContent = `${n} kort markerade`;
-  });
-  autoEl.confirmCancel.addEventListener('click', () => {
-    autoEl.confirmDlg.classList.remove('open');
-    autoEl.result.textContent = 'Sticket hoppades över';
-  });
 
   autoEl.drawBtn.addEventListener('click', () => autoEl.drawBtn.classList.toggle('active'));
   autoEl.resetBtn.addEventListener('click', () => {
     region = null;
     try { localStorage.removeItem(STORE_KEY + ':region'); } catch (e) {}
-    setRegionBox(autoEl.box, null);
+    setRegionBox(null);
   });
   autoEl.wrap.addEventListener('pointerdown', drawStart);
   autoEl.wrap.addEventListener('pointermove', drawMove);
   autoEl.wrap.addEventListener('pointerup', drawEnd);
   autoEl.stopBtn.addEventListener('click', stopAuto);
-  autoEl.scanBtn.addEventListener('click', scanTrick);
+  autoEl.scanBtn.addEventListener('click', doScan);
+  autoEl.debugBtn.addEventListener('click', showDebug);
+  autoEl.confirmSubmit.addEventListener('click', () => { autoEl.confirmDlg.classList.remove('open'); pendingCrops = []; });
+  autoEl.confirmCancel.addEventListener('click', () => { autoEl.confirmDlg.classList.remove('open'); pendingCrops = []; });
   autoBtn.addEventListener('click', () => {
     if (autoActive) {
       if (!autoEl.modal.classList.contains('open')) autoEl.modal.classList.add('open');
@@ -1146,7 +1250,6 @@
       startAuto();
     }
   });
-
   // ---- PWA / install ----
   let deferredPrompt = null;
   const installBtn = document.getElementById('installBtn');
@@ -1178,7 +1281,7 @@
       const t = e.target;
       if (!t || t.tagName !== 'INPUT') resetAll();
     }
-    if (e.key === 'F5') { e.preventDefault(); scanTrick(); }
+    if (e.key === 'F5') { e.preventDefault(); doScan(); }
     if (e.key === 'Escape') {
       autoEl.confirmDlg.classList.remove('open');
       autoEl.modal.classList.remove('open');

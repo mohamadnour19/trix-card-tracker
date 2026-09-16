@@ -28,7 +28,7 @@ Spåra och bocka av spelade kort i **Trix** under pågående spel – med ett en
 1. Öppna appen via **https** eller `http://localhost` (skärmdelning blockeras annars).
 2. Klicka **"Auto: Av"** och välj Jawaker-fönstret när webbläsaren frågar.
 3. Dra en ruta runt stick-området i mitten av bordet (sparas för nästa gång).
-4. Efter varje stick: tryck **`F5`** – appen känner igen korten och bokar av dem. Vid osäkerhet frågar den om bekräftelse.
+4. Efter ett spelat kort (eller ett helt stick): tryck **`F5`** – appen känner igen det översta kortet och bokar av det. Vid osäkerhet frågar den vilket kort som spelades.
 
 ### Installera som Windows-app (PWA)
 
