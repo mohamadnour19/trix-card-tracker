@@ -148,6 +148,7 @@
   .confirm-item img { width: 44px; height: 62px; object-fit: cover; border-radius: 4px; }
   .confirm-item .choices { display: flex; flex-direction: column; gap: 4px; }
   .confirm-item button { padding: 3px 8px; font-size: .78rem; border-radius: 6px; }
+  .confirm-item button.sugg { background: rgba(240,180,41,.3); color: #ffe9a8; font-weight: 700; }
   .confirm-item button.picked { background: var(--gold); color: #1a1d29; font-weight: 700; }
   #confirmSubmit { background: var(--ok); color: #062c18; font-weight: 700; }
 
@@ -920,11 +921,12 @@
     bctx.drawImage(work, 0, 0);
     const bgData = bctx.getImageData(0, 0, cw, ch).data;
     const mask = new Uint8Array(cw * ch);
+    let brightCount = 0;
     for (let i = 0; i < gray.length; i++) {
       const bgv = 0.299 * bgData[i * 4] + 0.587 * bgData[i * 4 + 1] + 0.114 * bgData[i * 4 + 2];
-      if (gray[i] > 120 && gray[i] > bgv + 24) mask[i] = 1;
+      if (gray[i] > 95 && gray[i] > bgv + 12) { mask[i] = 1; brightCount++; }
     }
-    return { mask, cw, ch, scale };
+    return { mask, cw, ch, scale, ratio: brightCount / (cw * ch) };
   }
 
   function topBottomEdges(mask, cw, ch) {
@@ -966,14 +968,14 @@
     return bb;
   }
 
-  function detectNewestCard(src, crop) {
-    const { mask, cw, ch, scale } = brightMask(src, crop);
+  function detectNewestCard(maskData, crop) {
+    const { mask, cw, ch, scale } = maskData;
     const cR = cardCandidate(mask, cw, ch, 'R');
     const cL = cardCandidate(mask, cw, ch, 'L');
     let best = null;
     if (cR && cL) best = cR.fill > cL.fill ? cR : cL;
     else best = cR || cL;
-    if (!best || best.h < ch * 0.12 || best.w < cw * 0.05 || best.fill < 0.28) return null;
+    if (!best || best.h < ch * 0.08 || best.w < cw * 0.04 || best.fill < 0.22) return null;
     return { x: crop.x + best.x / scale, y: crop.y + best.y / scale, w: best.w / scale, h: best.h / scale, fill: best.fill };
   }
 
@@ -1061,17 +1063,20 @@
     return { color: redPx >= blackPx ? 'red' : 'black', mask: normalizeMask(ink, cw, chh) };
   }
 
+  function topMatches(q, n) {
+    if (!q) return [];
+    buildTemplates();
+    const list = TEMPLATES.filter(t => t.color === q.color && state.has(t.key) && !state.get(t.key));
+    return list
+      .map(t => ({ key: t.key, score: iou(q.mask, t.mask) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, n);
+  }
+
   function matchCorner(q) {
     if (!q) return null;
-    buildTemplates();
-    let best = null;
-    for (const t of TEMPLATES) {
-      if (t.color !== q.color) continue;
-      if (state.has(t.key) && state.get(t.key)) continue;
-      const s = iou(q.mask, t.mask);
-      if (!best || s > best.score) best = { key: t.key, score: s };
-    }
-    return best && best.score >= 0.45 ? best : null;
+    const tops = topMatches(q, 1);
+    return tops.length && tops[0].score >= 0.30 ? tops[0] : null;
   }
 
   function markCardPlayed(key) {
@@ -1101,24 +1106,57 @@
   }
 
   // --- Bekräfta-dialog: klicka rätt kort i kortleken ---
+  function cropBox(crop) { return { x: crop.x, y: crop.y, w: crop.w, h: crop.h }; }
+
+  function updateConfirmLeft() {
+    const left = pendingCrops.filter(it => !it.done).length;
+    autoEl.confirmSubmit.textContent = left ? `Klar (${left} kvar)` : 'Klar';
+  }
+
   function openConfirmDialog(src, items) {
     pendingCrops = items;
     autoEl.confirmPreview.innerHTML = '';
     autoEl.confirmPick.innerHTML = '';
     autoEl.confirmDlg.classList.add('open');
-    autoEl.confirmSubmit.textContent = 'Klar';
 
     const desc = document.createElement('div');
     desc.className = 'modal-hint';
-    desc.textContent = 'Klicka rätt kort i kortleken nedan för varje bild ovan.';
+    desc.textContent = 'Klicka rätt kort för varje bild ovan. Gulmarkerade är appens bästa gissningar – annars välj i hela kortleken nedan.';
     autoEl.confirmPreview.appendChild(desc);
 
     const wrap = document.createElement('div');
     wrap.className = 'confirm-preview';
     items.forEach((it) => {
+      const holder = document.createElement('div');
+      holder.className = 'confirm-item';
       const img = document.createElement('img');
       img.src = cropToDataURL(src, it.box);
-      wrap.appendChild(img);
+      holder.appendChild(img);
+
+      const choices = document.createElement('div');
+      choices.className = 'choices';
+      if (it.sugg && it.sugg.length) {
+        it.sugg.forEach(key => {
+          const [sid, rank] = key.split('-');
+          const s = SUITS.find(x => x.id === sid);
+          const b = document.createElement('button');
+          b.className = 'sugg';
+          b.textContent = `${rankShort(rank)} ${s.name}`;
+          b.addEventListener('click', () => {
+            markCardPlayed(key);
+            b.disabled = true;
+            b.style.opacity = '.35';
+            playClick();
+            updateCounters();
+            save();
+            it.done = true;
+            updateConfirmLeft();
+          });
+          choices.appendChild(b);
+        });
+      }
+      holder.appendChild(choices);
+      wrap.appendChild(holder);
     });
     autoEl.confirmPreview.appendChild(wrap);
 
@@ -1135,13 +1173,14 @@
         updateCounters();
         save();
         const first = items.find(it => !it.done);
-        if (first) { first.done = true; }
-        const left = items.filter(it => !it.done).length;
-        autoEl.confirmSubmit.textContent = left ? `Klar (${left} kort kvar)` : 'Klar';
+        if (first) first.done = true;
+        updateConfirmLeft();
       });
       autoEl.confirmPick.appendChild(b);
     });
+
     items.forEach(it => { it.done = false; });
+    updateConfirmLeft();
   }
 
   // --- Debug-visualisering ---
@@ -1168,21 +1207,28 @@
   // --- Scan ---
   function doScan() {
     if (!autoActive) return;
-    if (!region) { autoEl.status.textContent = 'Rita en ruta först'; return; }
     autoEl.scanBtn.disabled = true;
     autoEl.result.textContent = 'Scannar…';
+    if (!region) {
+      autoEl.result.textContent = 'Rita en ruta runt stick-området först';
+      autoEl.scanBtn.disabled = false;
+      return;
+    }
     const g = grabFrame();
-    if (!g) { autoEl.scanBtn.disabled = false; autoEl.result.textContent = 'Ingen bild'; return; }
+    if (!g) { autoEl.result.textContent = 'Ingen bild'; autoEl.scanBtn.disabled = false; return; }
 
-    const card = detectNewestCard(g.canvas, g.crop);
+    const maskData = brightMask(g.canvas, g.crop);
+    const card = detectNewestCard(maskData, g.crop);
     if (!card) {
-      autoEl.result.textContent = 'Inga kort hittade – rita ny ruta eller tryck Visa bild';
+      autoEl.result.textContent = `Inget kort detekterades (ljus ${Math.round((maskData.ratio || 0) * 100)}%). Öppna dialogen och klicka rätt kort i kortleken.`;
       drawDebug(g, [], {});
+      openConfirmDialog(g.canvas, [{ box: cropBox(g.crop), sugg: [] }]);
       autoEl.scanBtn.disabled = false;
       return;
     }
 
     const q = cornerQuery(g.canvas, card);
+    const tops = topMatches(q, 3);
     const match = matchCorner(q);
     const notes = {};
     let msg = '';
@@ -1202,9 +1248,17 @@
       notes[match.key] = msg;
     } else {
       card.key = '?';
-      notes['?'] = 'osäker – välj i dialogen';
-      msg = 'Osäkert kort – välj i dialogrutan';
-      openConfirmDialog(g.canvas, [{ box: card }]);
+      notes['?'] = 'osäker';
+      msg = 'Kortet kändes inte igen – välj rätt kort i dialogen';
+      openConfirmDialog(g.canvas, [{ box: card, sugg: tops.map(t => t.key) }]);
+    }
+
+    if (tops.length) {
+      const suggTxt = tops.map(t => {
+        const [si, r] = t.key.split('-');
+        return `${rankShort(r)} ${SUITS.find(x => x.id === si).name} (${Math.round(t.score * 100)}%)`;
+      }).join(', ');
+      msg += ` · Förslag: ${suggTxt}`;
     }
     autoEl.result.textContent = msg;
     drawDebug(g, [card], notes);
@@ -1215,16 +1269,18 @@
     if (!autoActive) return;
     const g = grabFrame();
     if (!g) return;
-    const card = detectNewestCard(g.canvas, g.crop);
+    const maskData = brightMask(g.canvas, g.crop);
+    const card = detectNewestCard(maskData, g.crop);
     if (card) {
       const q = cornerQuery(g.canvas, card);
-      const match = matchCorner(q);
-      card.key = match ? match.key : '?';
-      drawDebug(g, [card], { [card.key]: match ? `match ${Math.round(match.score * 100)}%` : 'ingen match' });
-      autoEl.result.textContent = `Ruta: ${Math.round(card.w)}x${Math.round(card.h)}px, fyllnad ${Math.round(card.fill * 100)}%`;
+      const tops = topMatches(q, 3);
+      card.key = tops.length ? tops[0].key : '?';
+      drawDebug(g, [card], { [card.key]: tops.length ? `bäst ${Math.round(tops[0].score * 100)}%` : 'ingen match' });
+      autoEl.result.textContent = `Ruta: ${Math.round(card.w)}x${Math.round(card.h)}px, fyllnad ${Math.round(card.fill * 100)}%, ljus ${Math.round((maskData.ratio || 0) * 100)}%` +
+        (tops.length ? ` · ${tops.map(t => { const [si, r] = t.key.split('-'); return `${rankShort(r)} ${SUITS.find(x => x.id === si).name} (${Math.round(t.score * 100)}%)`; }).join(', ')}` : '');
     } else {
       drawDebug(g, [], {});
-      autoEl.result.textContent = 'Inga kort i rutan – rita ny ruta eller förstora';
+      autoEl.result.textContent = `Inga kort i rutan (ljus ${Math.round((maskData.ratio || 0) * 100)}%) – rita ny ruta eller förstora`;
     }
   }
 
