@@ -12,6 +12,7 @@ Spåra och bocka av spelade kort i **Trix** under pågående spel – med ett en
 - **Varningar & färgstatus** – pulserande röd varning när en färg har ≤3 kort kvar, grön bock när en färg är avklarad
 - **Autosave** – leken sparas automatiskt och finns kvar efter stängning
 - **Ångra** – knapp eller `Ctrl+Z`
+- **Auto-läge (skärmavläsning av Jawaker)** – dela spel-fönstret, rita in stick-området, tryck `F5` efter varje stick så bockas korten av automatiskt (kräver https/localhost)
 - **Rike-filter** – kombinera fokus på Hjärter Kung, Damer, Ruter eller Spader
 - **Highlights** – guldmarkering av Damer, röd markering av Hjärter Kung och Ruter-kort
 - **Ljud & animationer** – klickljud och flipp-animation (avstängningsbart)
@@ -19,7 +20,15 @@ Spåra och bocka av spelade kort i **Trix** under pågående spel – med ett en
 
 ## Kom igång
 
-Öppna `index.html` direkt i din webbläsare – allt fungerar utan installation.
+- **Online:** [mohamadnour19.github.io/trix-card-tracker](https://mohamadnour19.github.io/trix-card-tracker/)
+- **Lokalt:** Öppna `index.html` direkt i din webbläsare – allt fungerar utan installation.
+
+### Auto-läge (skärmavläsning av Jawaker)
+
+1. Öppna appen via **https** eller `http://localhost` (skärmdelning blockeras annars).
+2. Klicka **"Auto: Av"** och välj Jawaker-fönstret när webbläsaren frågar.
+3. Dra en ruta runt stick-området i mitten av bordet (sparas för nästa gång).
+4. Efter varje stick: tryck **`F5`** – appen känner igen korten och bokar av dem. Vid osäkerhet frågar den om bekräftelse.
 
 ### Installera som Windows-app (PWA)
 
@@ -38,6 +47,7 @@ Spåra och bocka av spelade kort i **Trix** under pågående spel – med ett en
 | --- | --- |
 | `Ctrl+Z` | Ångra senaste klick |
 | `R` | Återställ alla kort |
+| `F5` | Scanna sticket (i auto-läge) |
 
 ## Filstruktur
 
