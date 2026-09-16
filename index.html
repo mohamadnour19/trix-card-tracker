@@ -78,6 +78,79 @@
 
   #installBtn { background: #2f5e3a; color: #e2ffe9; }
 
+  #autoBtn { background: #5a3d8a; color: #f0e9ff; }
+  #autoBtn.active { background: var(--gold); color: #1a1d29; }
+  #autoBtn:disabled { opacity: .4; cursor: default; }
+
+  .modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(10,12,20,.88);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+    padding: 16px;
+  }
+
+  .modal.open { display: flex; }
+
+  .modal-box {
+    background: var(--panel);
+    border-radius: 14px;
+    padding: 18px;
+    max-width: 980px;
+    width: 100%;
+    max-height: 92vh;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.6);
+  }
+
+  .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .modal-title { font-weight: 700; font-size: 1.05rem; }
+  .modal-hint { color: var(--muted); font-size: .82rem; line-height: 1.5; }
+
+  .region-wrap {
+    position: relative;
+    background: #000;
+    border-radius: 8px;
+    overflow: hidden;
+    min-height: 300px;
+    width: 100%;
+    cursor: crosshair;
+    touch-action: none;
+  }
+
+  .region-wrap video {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 58vh;
+  }
+
+  .region-box {
+    position: absolute;
+    border: 2px solid var(--gold);
+    background: rgba(240,180,41,.18);
+    display: none;
+    box-shadow: 0 0 0 9999px rgba(10,12,20,.55);
+    pointer-events: none;
+  }
+
+  .modal-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .badge { font-size: .7rem; padding: 2px 8px; border-radius: 20px; background: var(--panel-light); color: var(--muted); }
+
+  #confirmDlg .modal-box { max-width: 720px; }
+  .confirm-preview { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+  .confirm-item { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 8px; background: var(--panel-light); }
+  .confirm-item img { width: 44px; height: 62px; object-fit: cover; border-radius: 4px; }
+  .confirm-item .choices { display: flex; flex-direction: column; gap: 4px; }
+  .confirm-item button { padding: 3px 8px; font-size: .78rem; border-radius: 6px; }
+  .confirm-item button.picked { background: var(--gold); color: #1a1d29; font-weight: 700; }
+  #confirmSubmit { background: var(--ok); color: #062c18; font-weight: 700; }
+
   .counters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 
   .counter {
@@ -311,6 +384,7 @@
   <header>
     <h1>Trix <span class="trix">Card</span> Tracker</h1>
     <div class="controls">
+      <button id="autoBtn" title="Auto-läge: scanna stick från skärmen (F5)">Auto: Av</button>
       <button id="soundBtn" title="Ljud av/på">Ljud: På</button>
       <button id="undoBtn" title="Ångra senaste klick (Ctrl+Z)" disabled>Ångra (Ctrl+Z)</button>
       <button id="resetBtn" title="Starta ny runda">Återställ alla</button>
@@ -359,6 +433,43 @@
 
   <main></main>
 
+  <div class="modal" id="autoModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <span class="modal-title">Auto-läge – markera stick-området</span>
+        <span class="badge" id="autoStatus"></span>
+      </div>
+      <div class="region-wrap" id="regionWrap">
+        <video id="screenVideo" autoplay playsinline muted></video>
+        <div class="region-box" id="regionBox"></div>
+      </div>
+      <div class="modal-hint">
+        1. Dela Jawaker-fönstret när webbläsaren frågar. &nbsp;2. Dra en ruta runt området där spelade kort ligger (mitten av bordet). &nbsp;3. Under spelet: tryck <b>F5</b> eller knappen "Scanna" efter varje stick.
+      </div>
+      <div class="modal-actions">
+        <button id="drawRegionBtn" class="active">Rita ruta</button>
+        <button id="scanBtn" title="Scanna stick (F5)">Scanna stick (F5)</button>
+        <button id="stopAutoBtn">Stoppa auto</button>
+        <button id="regionResetBtn">Rensa ruta</button>
+        <span style="margin-left:auto; color:var(--muted); font-size:.78rem" id="scanResult"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="confirmDlg">
+    <div class="modal-box">
+      <div class="modal-head">
+        <span class="modal-title">Bekräfta kort i sticket</span>
+      </div>
+      <div class="modal-hint">Appen var osäker på några kort. Välj rätt kort (eller "Hoppa över") för varje.</div>
+      <div class="confirm-preview" id="confirmPreview"></div>
+      <div class="modal-actions">
+        <button id="confirmSubmit">Markera markerade ()</button>
+        <button id="confirmCancel">Hoppa över detta stick</button>
+      </div>
+    </div>
+  </div>
+
   <footer>
     <details>
       <summary>Installera som app (PWA) — så här</summary>
@@ -367,6 +478,15 @@
         <code>cd "C:\Users\mohma\Desktop\card tracker"</code>&nbsp;<code>python -m http.server 8080</code><br>
         2. Öppna <code>http://localhost:8080</code> i Chrome/Edge.<br>
         3. Tryck på installera-ikonen i adressfältet (eller <code>Installera app</code>-knappen när den dyker upp).
+      </p>
+    </details>
+    <details style="margin-top:6px">
+      <summary>Auto-läge (skärmavläsning av Jawaker) — så här</summary>
+      <p style="margin-top:6px">
+        1. Klicka <b>Auto: Av</b> och dela Jawaker-fönstret.<br>
+        2. Dra en ruta runt stick-området i mitten av bordet (sparas).<br>
+        3. Efter varje stick: tryck <b>F5</b> (eller <b>Scanna stick</b>) — appen markerar korten den känner igen.<br>
+        Kräver https:// eller localhost. Vid osäkerhet frågar appen om bekräftelse.
       </p>
     </details>
   </footer>
@@ -634,6 +754,399 @@
     update();
   }
 
+  // ---- Auto: skärmavläsning (Jawaker) ----
+  const autoEl = {
+    modal: document.getElementById('autoModal'),
+    video: document.getElementById('screenVideo'),
+    wrap: document.getElementById('regionWrap'),
+    box: document.getElementById('regionBox'),
+    status: document.getElementById('autoStatus'),
+    scanBtn: document.getElementById('scanBtn'),
+    stopBtn: document.getElementById('stopAutoBtn'),
+    drawBtn: document.getElementById('drawRegionBtn'),
+    resetBtn: document.getElementById('regionResetBtn'),
+    result: document.getElementById('scanResult'),
+    confirmDlg: document.getElementById('confirmDlg'),
+    confirmPreview: document.getElementById('confirmPreview'),
+    confirmSubmit: document.getElementById('confirmSubmit'),
+    confirmCancel: document.getElementById('confirmCancel'),
+  };
+  const autoBtn = document.getElementById('autoBtn');
+
+  let screenStream = null;
+  let autoActive = false;
+  let region = null;                 // normalized 0..1 {x,y,w,h}
+  let drawState = null;              // drag in progress
+  let tesseractLoaded = false;
+  let confirmItems = [];
+
+  function setRegionBox(box, r) {
+    if (!r) { box.style.display = 'none'; return; }
+    box.style.display = 'block';
+    box.style.left = (r.x * 100) + '%';
+    box.style.top = (r.y * 100) + '%';
+    box.style.width = (r.w * 100) + '%';
+    box.style.height = (r.h * 100) + '%';
+  }
+  function loadRegion() {
+    try { region = JSON.parse(localStorage.getItem(STORE_KEY + ':region') || 'null'); } catch (e) { region = null; }
+    setRegionBox(autoEl.box, region);
+  }
+  function saveRegion() {
+    if (region) try { localStorage.setItem(STORE_KEY + ':region', JSON.stringify(region)); } catch (e) {}
+  }
+
+  async function startAuto() {
+    if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+      alert('Auto-läge kräver https:// eller localhost (lösen skärmdelning blockeras av webbläsaren). Öppna appen på https://mohamadnour19.github.io/trix-card-tracker/ eller via en lokal server.');
+      return;
+    }
+    try {
+      screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface: 'window' }, audio: false });
+    } catch (e) { return; }
+    autoEl.video.srcObject = screenStream;
+    autoActive = true;
+    autoBtn.textContent = 'Auto: På';
+    autoBtn.classList.add('active');
+    autoEl.modal.classList.add('open');
+    autoEl.status.textContent = 'aktiv';
+    screenStream.getVideoTracks()[0].addEventListener('ended', stopAuto);
+    loadRegion();
+  }
+
+  function stopAuto() {
+    if (screenStream) { screenStream.getTracks().forEach(t => t.stop()); screenStream = null; }
+    autoActive = false;
+    autoBtn.textContent = 'Auto: Av';
+    autoBtn.classList.remove('active');
+    autoEl.modal.classList.remove('open');
+    autoEl.confirmDlg.classList.remove('open');
+  }
+
+  // --- Region drawing ---
+  function wrapEventPos(e) {
+    const rect = autoEl.wrap.getBoundingClientRect();
+    return { nx: (e.clientX - rect.left) / rect.width, ny: (e.clientY - rect.top) / rect.height };
+  }
+  function drawStart(e) {
+    if (!autoEl.drawBtn.classList.contains('active')) return;
+    const p = wrapEventPos(e);
+    drawState = { x: p.nx, y: p.ny, ex: p.nx, ey: p.ny };
+    autoEl.box.style.display = 'block';
+  }
+  function drawMove(e) {
+    if (!drawState) return;
+    const p = wrapEventPos(e);
+    drawState.ex = p.nx; drawState.ey = p.ny;
+    const rx = Math.min(drawState.x, drawState.ex), ry = Math.min(drawState.y, drawState.ey);
+    setRegionBox(autoEl.box, { x: rx, y: ry, w: Math.abs(drawState.ex - drawState.x), h: Math.abs(drawState.ey - drawState.y) });
+  }
+  function drawEnd(e) {
+    if (!drawState) return;
+    drawMove(e);
+    const rx = Math.min(drawState.x, drawState.ex), ry = Math.min(drawState.y, drawState.ey);
+    const w = Math.abs(drawState.ex - drawState.x), h = Math.abs(drawState.ey - drawState.y);
+    drawState = null;
+    if (w < 0.02 || h < 0.02) { autoEl.box.style.display = 'none'; return; }
+    region = { x: rx, y: ry, w, h };
+    saveRegion();
+    setRegionBox(autoEl.box, region);
+  }
+
+  // --- Frame + detection ----
+  function grabFrame() {
+    const v = autoEl.video;
+    if (!v.videoWidth || !region) return null;
+    const c = document.createElement('canvas');
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext('2d').drawImage(v, 0, 0);
+    const r = region;
+    const crop = { x: r.x * c.width, y: r.y * c.height, w: r.w * c.width, h: r.h * c.height };
+    return { canvas: c, crop };
+  }
+
+  function detectCards(src, crop) {
+    const scale = 480 / Math.max(1, crop.w);
+    const cw = Math.max(2, Math.round(crop.w * scale));
+    const ch = Math.max(2, Math.round(crop.h * scale));
+    const work = document.createElement('canvas');
+    work.width = cw; work.height = ch;
+    const wctx = work.getContext('2d');
+    wctx.drawImage(src, crop.x, crop.y, crop.w, crop.h, 0, 0, cw, ch);
+    const img = wctx.getImageData(0, 0, cw, ch);
+    const d = img.data;
+
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    const thr = Math.max(160, sum / (cw * ch));
+
+    const colCount = new Array(cw).fill(0);
+    for (let y = 0; y < ch; y++) {
+      for (let x = 0; x < cw; x++) {
+        const i = (y * cw + x) * 4;
+        if (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] > thr) colCount[x]++;
+      }
+    }
+
+    const minCol = ch * 0.22;
+    const bands = [];
+    let x = 0;
+    while (x < cw) {
+      if (colCount[x] > minCol) {
+        const x0 = x;
+        while (x < cw && colCount[x] > minCol) x++;
+        if (x - x0 >= cw * 0.05) bands.push([x0, x]);
+      } else x++;
+    }
+
+    const cards = [];
+    for (const [x0, x1] of bands) {
+      let y0 = ch, y1 = -1;
+      for (let y = 0; y < ch; y++) {
+        let cnt = 0;
+        for (let bx = x0; bx < x1; bx++) {
+          const i = (y * cw + bx) * 4;
+          if (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] > thr) cnt++;
+        }
+        if (cnt / (x1 - x0) > 0.16) { if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      }
+      if (y0 >= y1) continue;
+      const bw = x1 - x0, bh = y1 - y0;
+      const ar = bw / bh;
+      if (ar < 0.42 || ar > 1.05) continue;
+      if (bh < ch * 0.18 || bw < cw * 0.05) continue;
+      cards.push({ x: crop.x + x0 / scale, y: crop.y + y0 / scale, w: bw / scale, h: bh / scale });
+    }
+    cards.sort((a, b) => a.x - b.x);
+    return cards;
+  }
+
+  function analyzeCorner(src, card) {
+    const cornerW = card.w * 0.4, cornerH = card.h * 0.36;
+    const cw = Math.max(28, Math.round(cornerW * 2));
+    const ch = Math.max(26, Math.round(cornerH * 2));
+    const c = document.createElement('canvas');
+    c.width = cw; c.height = ch;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(src, card.x, card.y, cornerW, cornerH, 0, 0, cw, ch);
+    const d = ctx.getImageData(0, 0, cw, ch).data;
+    let redPx = 0, blackPx = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], g = d[i + 1], b = d[i + 2];
+      if (r > 140 && r > g + 45 && r > b + 45) redPx++;
+      else if (0.299 * r + 0.587 * g + 0.114 * b < 110 && r < 120) blackPx++;
+    }
+    const color = redPx > blackPx + 3 ? 'red' : blackPx > redPx ? 'black' : redPx > 0 ? 'red' : 'unknown';
+    return { canvas: c, color, hasRed: redPx, hasBlack: blackPx };
+  }
+
+  function loadTesseract() {
+    if (window.Tesseract) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  async function ocrRank(canvas) {
+    try {
+      const res = await Tesseract.recognize(canvas, 'eng', { logger: () => {} });
+      const txt = res.data.text || '';
+      const m = txt.match(/(10|[2-9]|A|K|Q|J)/i);
+      return m ? m[1].toUpperCase() : null;
+    } catch (e) { return null; }
+  }
+
+  function normRank(token) {
+    if (!token) return null;
+    const t = String(token).toUpperCase().trim();
+    if (t === 'A') return 'Ess';
+    if (t === 'K') return 'K';
+    if (t === 'Q') return 'D';
+    if (t === 'J') return 'Kn';
+    const n = parseInt(t, 10);
+    if (!isNaN(n) && n >= 2 && n <= 10) return String(n);
+    return null;
+  }
+
+  function remainingKeys(suitId) {
+    const out = [];
+    for (const rank of RANKS) {
+      const key = suitId + '-' + rank;
+      if (state.has(key) && !state.get(key)) out.push(key);
+    }
+    return out;
+  }
+
+  function markCardPlayed(key) {
+    if (state.get(key)) return;
+    state.set(key, true);
+    const card = document.querySelector(`.card[data-key="${key}"]`);
+    if (card) card.classList.add('played');
+    history.push(key);
+    if (history.length > 200) history.shift();
+  }
+
+  function cropToDataURL(src, card) {
+    const c = document.createElement('canvas');
+    c.width = 132; c.height = 184;
+    c.getContext('2d').drawImage(src, card.x, card.y, card.w, card.h, 0, 0, 132, 184);
+    return c.toDataURL('image/png');
+  }
+
+  async function scanTrick() {
+    if (!autoActive) return;
+    if (!region) { autoEl.status.textContent = 'Rita en ruta först'; return; }
+    autoEl.scanBtn.disabled = true;
+    autoEl.result.textContent = 'Scannar…';
+    const g = grabFrame();
+    if (!g) { autoEl.scanBtn.disabled = false; autoEl.result.textContent = 'Ingen bild'; return; }
+
+    const cards = detectCards(g.canvas, g.crop);
+    if (!cards.length) { autoEl.scanBtn.disabled = false; autoEl.result.textContent = 'Inga kort hittade'; return; }
+
+    let ocrOk = true;
+    try { await loadTesseract(); } catch (e) { ocrOk = false; }
+
+    const dets = [];
+    for (const card of cards) {
+      const a = analyzeCorner(g.canvas, card);
+      let rank = null;
+      if (ocrOk) rank = normRank(await ocrRank(a.canvas));
+      dets.push({ box: card, color: a.color, rank });
+    }
+
+    const recs = dets.map(det => {
+      const cands = [];
+      if (det.rank) {
+        const suitIds = det.color === 'red' ? ['hearts', 'diamonds']
+          : det.color === 'black' ? ['spades', 'clubs']
+          : SUITS.map(s => s.id);
+        for (const sid of suitIds) {
+          const key = sid + '-' + det.rank;
+          if (state.has(key) && !state.get(key)) cands.push(key);
+        }
+      }
+      return { det, cands };
+    });
+
+    const counts = {};
+    recs.forEach(r => r.cands.forEach(k => { counts[k] = (counts[k] || 0) + 1; }));
+
+    const confirmed = [];
+    const pending = [];
+    recs.forEach((r, j) => {
+      const unique = r.cands.filter(k => counts[k] === 1);
+      if (r.cands.length === 1 && counts[r.cands[0]] === 1) { confirmed.push(r.cands[0]); return; }
+      const chosen = unique.length === 1 ? unique[0] : null;
+      pending.push({ j, cands: r.cands, chosen });
+    });
+
+    confirmed.forEach(k => markCardPlayed(k));
+    updateCounters();
+    save();
+
+    if (pending.length) {
+      openConfirmDialog(g.canvas, pending);
+    } else {
+      playClick();
+      autoEl.result.textContent = `${confirmed.length} kort markerade`;
+    }
+    autoEl.scanBtn.disabled = false;
+  }
+
+  function openConfirmDialog(src, pending) {
+    confirmItems = pending;
+    autoEl.confirmPreview.innerHTML = '';
+    autoEl.confirmDlg.classList.add('open');
+
+    pending.forEach((p) => {
+      const det = p.det;
+      const item = document.createElement('div');
+      item.className = 'confirm-item';
+
+      const img = document.createElement('img');
+      img.src = cropToDataURL(src, det.box);
+      img.alt = 'kort';
+
+      const choices = document.createElement('div');
+      choices.className = 'choices';
+
+      if (!p.cands.length) {
+        const skip = document.createElement('button');
+        skip.textContent = 'Okänt – hoppa över';
+        skip.addEventListener('click', () => {
+          p.chosen = null;
+          skip.classList.add('picked');
+          [...choices.children].forEach(b => b.classList.remove('picked'));
+        });
+        choices.appendChild(skip);
+      } else {
+        p.cands.forEach(key => {
+          const [sid, rank] = key.split('-');
+          const s = SUITS.find(x => x.id === sid);
+          const b = document.createElement('button');
+          b.textContent = `${rankShort(rank)} ${s.name}`;
+          b.addEventListener('click', () => {
+            p.chosen = key;
+            [...choices.children].forEach(x => x.classList.remove('picked'));
+            b.classList.add('picked');
+            updateConfirmSubmit();
+          });
+          if (p.chosen === key) b.classList.add('picked');
+          choices.appendChild(b);
+        });
+      }
+
+      item.appendChild(img);
+      item.appendChild(choices);
+      autoEl.confirmPreview.appendChild(item);
+    });
+    updateConfirmSubmit();
+  }
+
+  function updateConfirmSubmit() {
+    const n = confirmItems.filter(p => p.chosen).length;
+    autoEl.confirmSubmit.textContent = `Markera markerade (${n})`;
+  }
+
+  autoEl.confirmSubmit.addEventListener('click', () => {
+    let n = 0;
+    confirmItems.forEach(p => { if (p.chosen) { markCardPlayed(p.chosen); n++; } });
+    updateCounters();
+    save();
+    autoEl.confirmDlg.classList.remove('open');
+    if (n) playClick();
+    autoEl.result.textContent = `${n} kort markerade`;
+  });
+  autoEl.confirmCancel.addEventListener('click', () => {
+    autoEl.confirmDlg.classList.remove('open');
+    autoEl.result.textContent = 'Sticket hoppades över';
+  });
+
+  autoEl.drawBtn.addEventListener('click', () => autoEl.drawBtn.classList.toggle('active'));
+  autoEl.resetBtn.addEventListener('click', () => {
+    region = null;
+    try { localStorage.removeItem(STORE_KEY + ':region'); } catch (e) {}
+    setRegionBox(autoEl.box, null);
+  });
+  autoEl.wrap.addEventListener('pointerdown', drawStart);
+  autoEl.wrap.addEventListener('pointermove', drawMove);
+  autoEl.wrap.addEventListener('pointerup', drawEnd);
+  autoEl.stopBtn.addEventListener('click', stopAuto);
+  autoEl.scanBtn.addEventListener('click', scanTrick);
+  autoBtn.addEventListener('click', () => {
+    if (autoActive) {
+      if (!autoEl.modal.classList.contains('open')) autoEl.modal.classList.add('open');
+      else stopAuto();
+    } else {
+      startAuto();
+    }
+  });
+
   // ---- PWA / install ----
   let deferredPrompt = null;
   const installBtn = document.getElementById('installBtn');
@@ -664,6 +1177,11 @@
     if (e.key.toLowerCase() === 'r' && !e.ctrlKey && !e.metaKey) {
       const t = e.target;
       if (!t || t.tagName !== 'INPUT') resetAll();
+    }
+    if (e.key === 'F5') { e.preventDefault(); scanTrick(); }
+    if (e.key === 'Escape') {
+      autoEl.confirmDlg.classList.remove('open');
+      autoEl.modal.classList.remove('open');
     }
   });
 
