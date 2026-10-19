@@ -1,4 +1,4 @@
-const CACHE = 'trix-tracker-v2';
+const CACHE = 'trix-tracker-v3';
 const CORE_ASSETS = ['./manifest.webmanifest', './sw.js', './icon.svg'];
 
 self.addEventListener('install', (event) => {

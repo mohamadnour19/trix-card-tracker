@@ -404,7 +404,7 @@
       <button id="autoBtn" title="Auto-läge: scanna stick från skärmen (F5)">Auto: Av</button>
       <button id="soundBtn" title="Ljud av/på">Ljud: På</button>
       <button id="undoBtn" title="Ångra senaste klick (Ctrl+Z)" disabled>Ångra (Ctrl+Z)</button>
-      <button id="resetBtn" title="Starta ny runda">Återställ alla</button>
+      <button id="resetBtn" title="Starta ny runda (Shift+R)">Återställ alla</button>
       <button id="installBtn" hidden>Installera app</button>
     </div>
   </header>
@@ -461,13 +461,14 @@
         <div class="region-box" id="regionBox"></div>
       </div>
       <div class="modal-hint">
-        1. Dela Jawaker-fönstret när webbläsaren frågar. &nbsp;2. Dra en ruta runt området där spelade kort ligger. &nbsp;3. Under spelet: tryck <b>F5</b> efter ett spelat kort (eller knappen "Scanna") så bokas kortet av automatiskt.
+        1. Dela Jawaker-fönstret när webbläsaren frågar. &nbsp;2. Dra en ruta runt området där spelade kort ligger. &nbsp;3. Under spelet: tryck <b>F5</b> efter <b>varje</b> spelat kort så bokas kortet av automatiskt (helt synliga kort). Vid osäkerhet öppnas en dialog med bild + gissningar.
       </div>
       <canvas id="debugCanvas" class="debug-canvas" hidden></canvas>
       <div class="modal-actions">
         <button id="drawRegionBtn" class="active">Rita ruta</button>
         <button id="scanBtn" title="Scanna kort (F5)">Scanna (F5)</button>
         <button id="debugBtn" title="Visa exakt vad appen ser">Visa bild</button>
+        <button id="logBtn" title="Spara varje scannad bild till en mapp du väljer (används för finjustering)">Bildlogg: Av</button>
         <button id="stopAutoBtn">Stoppa auto</button>
         <button id="regionResetBtn">Rensa ruta</button>
         <span style="margin-left:auto; color:var(--muted); font-size:.78rem" id="scanResult"></span>
@@ -505,8 +506,9 @@
       <p style="margin-top:6px">
         1. Klicka <b>Auto: Av</b> och dela Jawaker-fönstret.<br>
         2. Dra en ruta runt stick-området i mitten av bordet (sparas).<br>
-        3. Efter varje stick: tryck <b>F5</b> (eller <b>Scanna stick</b>) — appen markerar korten den känner igen.<br>
-        Kräver https:// eller localhost. Vid osäkerhet frågar appen om bekräftelse.
+        3. Efter <b>varje</b> spelat kort: tryck <b>F5</b> — appen markerar de helt synliga korten. Vid osäkerhet öppnas en dialog med bild och gula gissningar.<br>
+        4. Valfritt: <b>Bildlogg</b> sparar varje scannad bild till en mapp (för finjustering).<br>
+        Kräver https:// eller localhost. Genvägar: F5 scanna, Ctrl+Z ångra, Shift+R återställ.
       </p>
     </details>
   </footer>
@@ -793,6 +795,7 @@
     confirmPick: document.getElementById('confirmPick'),
     confirmSubmit: document.getElementById('confirmSubmit'),
     confirmCancel: document.getElementById('confirmCancel'),
+    logBtn: document.getElementById('logBtn'),
   };
   const autoBtn = document.getElementById('autoBtn');
 
@@ -899,8 +902,30 @@
     };
   }
 
-  // --- Detection: senaste (fullt synliga) kortet ---
-  function brightMask(src, crop) {
+  // --- Detection: hitta HELT SYNLIGA kort (Otsu + största rektangeln) ---
+  const AUTO_OK = 0.50;   // auto-markera vid minst 50% match
+  const AUTO_SUGG = 0.33; // visa som gissning i dialogen
+
+  function otsuThreshold(gray, total) {
+    const hist = new Float64Array(256);
+    for (let i = 0; i < gray.length; i++) hist[Math.min(255, Math.max(0, Math.round(gray[i])))]++;
+    let sum = 0;
+    for (let t = 0; t < 256; t++) sum += t * hist[t];
+    let sumB = 0, wB = 0, maxVar = -1, best = 127;
+    for (let t = 0; t < 256; t++) {
+      wB += hist[t];
+      if (!wB) continue;
+      const wF = total - wB;
+      if (!wF) break;
+      sumB += t * hist[t];
+      const mB = sumB / wB, mF = (sum - sumB) / wF;
+      const v = wB * wF * (mB - mF) * (mB - mF);
+      if (v > maxVar) { maxVar = v; best = t; }
+    }
+    return best;
+  }
+
+  function buildMask(src, crop) {
     const scale = 420 / Math.max(1, crop.w);
     const cw = Math.max(40, Math.round(crop.w * scale));
     const ch = Math.max(30, Math.round(crop.h * scale));
@@ -908,75 +933,69 @@
     work.width = cw; work.height = ch;
     const wctx = work.getContext('2d');
     wctx.drawImage(src, crop.x, crop.y, crop.w, crop.h, 0, 0, cw, ch);
-    const img = wctx.getImageData(0, 0, cw, ch);
-    const d = img.data;
+    const img = wctx.getImageData(0, 0, cw, ch).data;
     const gray = new Float32Array(cw * ch);
     for (let i = 0; i < gray.length; i++) {
-      gray[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+      gray[i] = 0.299 * img[i * 4] + 0.587 * img[i * 4 + 1] + 0.114 * img[i * 4 + 2];
     }
-    const bg = document.createElement('canvas');
-    bg.width = cw; bg.height = ch;
-    const bctx = bg.getContext('2d');
-    bctx.filter = 'blur(18px)';
-    bctx.drawImage(work, 0, 0);
-    const bgData = bctx.getImageData(0, 0, cw, ch).data;
-    const mask = new Uint8Array(cw * ch);
-    let brightCount = 0;
-    for (let i = 0; i < gray.length; i++) {
-      const bgv = 0.299 * bgData[i * 4] + 0.587 * bgData[i * 4 + 1] + 0.114 * bgData[i * 4 + 2];
-      if (gray[i] > 95 && gray[i] > bgv + 12) { mask[i] = 1; brightCount++; }
-    }
-    return { mask, cw, ch, scale, ratio: brightCount / (cw * ch) };
-  }
-
-  function topBottomEdges(mask, cw, ch) {
-    const top = new Int16Array(cw).fill(ch);
-    const bot = new Int16Array(cw).fill(-1);
-    for (let x = 0; x < cw; x++) {
-      for (let y = 0; y < ch; y++) {
-        if (mask[y * cw + x]) { if (y < top[x]) top[x] = y; if (y > bot[x]) bot[x] = y; }
+    const thr = Math.max(otsuThreshold(gray, gray.length), 50);
+    const raw = new Uint8Array(cw * ch);
+    for (let i = 0; i < gray.length; i++) if (gray[i] > thr) raw[i] = 1;
+    const clean = new Uint8Array(cw * ch);
+    let count = 0;
+    for (let y = 0; y < ch; y++) {
+      for (let x = 0; x < cw; x++) {
+        if (!raw[y * cw + x]) continue;
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          const yy = y + dy;
+          if (yy < 0 || yy >= ch) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx;
+            if (xx < 0 || xx >= cw) continue;
+            n += raw[yy * cw + xx];
+          }
+        }
+        if (n >= 6) { clean[y * cw + x] = 1; count++; }
       }
     }
-    return { top, bot };
+    return { mask: clean, cw, ch, scale, cropX: crop.x, cropY: crop.y, thr, ratio: count / (cw * ch) };
   }
 
-  function cardCandidate(mask, cw, ch, side) {
-    const { top, bot } = topBottomEdges(mask, cw, ch);
-    const dir = side === 'R' ? -1 : 1;
-    const start = side === 'R' ? cw - 1 : 0;
-    let xA = -1;
-    for (let x = start; x >= 0 && x < cw; x += dir) {
-      if (top[x] < ch) { xA = x; break; }
-    }
-    if (xA < 0) return null;
-    const yTop = top[xA];
-    const yBot = bot[xA];
-    let xEdge = xA;
-    for (let x = xA; x >= 0 && x < cw; x += dir) {
-      if (top[x] >= ch) break;
-      if (Math.abs(top[x] - yTop) <= 4) xEdge = x;
-      else break;
-    }
-    const left = side === 'R' ? Math.min(xEdge, xA) : xA;
-    const right = side === 'R' ? xA : Math.max(xEdge, xA);
-    const bb = { x: left, y: yTop, w: right - left + 1, h: yBot - yTop + 1 };
-    let fill = 0;
-    for (let y = bb.y; y <= bb.y + bb.h && y < ch; y++)
-      for (let x = bb.x; x <= bb.x + bb.w && x < cw; x++)
-        if (mask[y * cw + x]) fill++;
-    bb.fill = fill / (bb.w * bb.h);
-    return bb;
-  }
-
-  function detectNewestCard(maskData, crop) {
-    const { mask, cw, ch, scale } = maskData;
-    const cR = cardCandidate(mask, cw, ch, 'R');
-    const cL = cardCandidate(mask, cw, ch, 'L');
+  function maximalRect(mask, cw, ch) {
+    const heights = new Int32Array(cw);
     let best = null;
-    if (cR && cL) best = cR.fill > cL.fill ? cR : cL;
-    else best = cR || cL;
-    if (!best || best.h < ch * 0.08 || best.w < cw * 0.04 || best.fill < 0.22) return null;
-    return { x: crop.x + best.x / scale, y: crop.y + best.y / scale, w: best.w / scale, h: best.h / scale, fill: best.fill };
+    for (let y = 0; y < ch; y++) {
+      for (let x = 0; x < cw; x++) heights[x] = mask[y * cw + x] ? heights[x] + 1 : 0;
+      const stack = [];
+      for (let x = 0; x <= cw; x++) {
+        const hCur = x < cw ? heights[x] : 0;
+        while (stack.length && heights[stack[stack.length - 1]] >= hCur) {
+          const topI = stack.pop();
+          const w = stack.length ? x - stack[stack.length - 1] - 1 : x;
+          const area = heights[topI] * w;
+          if (!best || area > best.area) best = { area, x: x - w, y: y - heights[topI] + 1, w, h: heights[topI] };
+        }
+        stack.push(x);
+      }
+    }
+    return best;
+  }
+
+  function findCardRects(maskData) {
+    const { mask, cw, ch, scale, cropX, cropY } = maskData;
+    const m = Uint8Array.from(mask);
+    const out = [];
+    for (let pass = 0; pass < 4; pass++) {
+      const r = maximalRect(m, cw, ch);
+      if (!r || r.h < ch * 0.15 || r.w < cw * 0.05) break;
+      const aspect = r.w / r.h;
+      if (aspect < 0.45 || aspect > 0.95) break;
+      out.push({ x: cropX + r.x / scale, y: cropY + r.y / scale, w: r.w / scale, h: r.h / scale, fill: 1 });
+      for (let y = Math.max(0, r.y - 2); y < Math.min(ch, r.y + r.h + 2); y++)
+        for (let x = Math.max(0, r.x - 2); x < Math.min(cw, r.x + r.w + 2); x++) m[y * cw + x] = 0;
+    }
+    return out;
   }
 
   // --- Hörnavläsning via glyph-template-matching (offline) ---
@@ -1012,71 +1031,91 @@
   }
 
   let TEMPLATES = null;
+  const T_FONTS = ['Arial', 'Verdana', 'Tahoma', 'Georgia', '"Times New Roman"', '"Trebuchet MS"'];
   function buildTemplates() {
     if (TEMPLATES) return TEMPLATES;
     const t = document.createElement('canvas');
+    t.width = 48; t.height = 60;
     const ctx = t.getContext('2d');
     TEMPLATES = [];
     for (const suit of SUITS) {
-      const color = suit.cls === 'red' ? '#d33a45' : '#000000';
+      const color = suit.cls === 'red' ? '#d33a45' : '#111111';
       for (const std of STD_RANKS) {
-        t.width = 48; t.height = 60;
-        ctx.clearRect(0, 0, 48, 60);
-        ctx.fillStyle = color;
-        ctx.font = '800 22px Arial, sans-serif';
-        ctx.textBaseline = 'top';
-        ctx.textAlign = 'left';
-        ctx.fillText(std, 2, 2);
-        ctx.font = '800 18px Arial, sans-serif';
-        ctx.fillText(suit.symbol, 2, 30);
-        const img = ctx.getImageData(0, 0, 48, 60).data;
-        const mask = new Uint8Array(48 * 60);
-        for (let i = 0; i < mask.length; i++) {
-          const r = img[i * 4], g = img[i * 4 + 1], b = img[i * 4 + 2];
-          if ((r > 150 && r > g + 40 && r > b + 40) || (r < 110 && g < 110 && b < 110)) mask[i] = 1;
+        const variants = [];
+        for (const font of T_FONTS) {
+          for (const weight of ['700', '900']) {
+            ctx.clearRect(0, 0, 48, 60);
+            ctx.fillStyle = color;
+            ctx.font = `${weight} 22px ${font}, sans-serif`;
+            ctx.textBaseline = 'top';
+            ctx.textAlign = 'left';
+            ctx.fillText(std, 2, 2);
+            ctx.font = `${weight} 18px ${font}, sans-serif`;
+            ctx.fillText(suit.symbol, 2, 30);
+            const img = ctx.getImageData(0, 0, 48, 60).data;
+            const mask = new Uint8Array(48 * 60);
+            for (let i = 0; i < mask.length; i++) {
+              const r = img[i * 4], g = img[i * 4 + 1], b = img[i * 4 + 2];
+              if ((r > 150 && r > g + 40 && r > b + 40) || (r < 110 && g < 110 && b < 110)) mask[i] = 1;
+            }
+            variants.push(normalizeMask(mask, 48, 60));
+          }
         }
-        TEMPLATES.push({ key: suit.id + '-' + ourRank(std), color, mask: normalizeMask(mask, 48, 60) });
+        TEMPLATES.push({ key: suit.id + '-' + ourRank(std), color, variants });
       }
     }
     return TEMPLATES;
   }
 
   function cornerQuery(src, card) {
-    const cornerW = card.w * 0.48, cornerH = card.h * 0.38;
-    const cw = Math.max(48, Math.round(cornerW * 2.2));
-    const chh = Math.max(48, Math.round(cornerH * 2.2));
+    const cornerW = Math.max(6, card.w * 0.5);
+    const cornerH = Math.max(6, card.h * 0.34);
+    const cw = 96;
+    const chh = Math.max(40, Math.round(96 * cornerH / cornerW));
     const c = document.createElement('canvas');
     c.width = cw; c.height = chh;
     const ctx = c.getContext('2d');
     ctx.drawImage(src, card.x, card.y, cornerW, cornerH, 0, 0, cw, chh);
     const img = ctx.getImageData(0, 0, cw, chh).data;
-    let redPx = 0, blackPx = 0;
+    const gray = new Float32Array(cw * chh);
+    const hist = new Int32Array(256);
+    for (let i = 0; i < gray.length; i++) {
+      gray[i] = 0.299 * img[i * 4] + 0.587 * img[i * 4 + 1] + 0.114 * img[i * 4 + 2];
+      hist[Math.min(255, Math.round(gray[i]))]++;
+    }
+    let acc = 0, white = 255;
+    for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc > gray.length * 0.12) { white = v; break; } }
     const ink = new Uint8Array(cw * chh);
+    let redPx = 0, blackPx = 0;
     for (let i = 0; i < ink.length; i++) {
       const r = img[i * 4], g = img[i * 4 + 1], b = img[i * 4 + 2];
       const red = r > 140 && r > g + 40 && r > b + 40;
-      const dark = r < 130 && g < 130 && b < 130;
-      if (red) { redPx++; ink[i] = 1; }
-      else if (dark) { blackPx++; ink[i] = 1; }
+      const spread = Math.max(r, g, b) - Math.min(r, g, b);
+      const dark = gray[i] < white * 0.72 && spread < 60;
+      if (red) { ink[i] = 1; redPx++; }
+      else if (dark) { ink[i] = 1; blackPx++; }
     }
     if (!redPx && !blackPx) return null;
     return { color: redPx >= blackPx ? 'red' : 'black', mask: normalizeMask(ink, cw, chh) };
   }
 
+  function templateScore(q, t) {
+    let s = 0;
+    for (const v of t.variants) {
+      const x = iou(q.mask, v);
+      if (x > s) s = x;
+    }
+    return s;
+  }
+
   function topMatches(q, n) {
     if (!q) return [];
     buildTemplates();
-    const list = TEMPLATES.filter(t => t.color === q.color && state.has(t.key) && !state.get(t.key));
-    return list
-      .map(t => ({ key: t.key, score: iou(q.mask, t.mask) }))
+    return TEMPLATES
+      .filter(t => t.color === q.color && state.has(t.key) && !state.get(t.key))
+      .map(t => ({ key: t.key, score: templateScore(q, t) }))
       .sort((a, b) => b.score - a.score)
       .slice(0, n);
-  }
-
-  function matchCorner(q) {
-    if (!q) return null;
-    const tops = topMatches(q, 1);
-    return tops.length && tops[0].score >= 0.30 ? tops[0] : null;
   }
 
   function markCardPlayed(key) {
@@ -1106,8 +1145,6 @@
   }
 
   // --- Bekräfta-dialog: klicka rätt kort i kortleken ---
-  function cropBox(crop) { return { x: crop.x, y: crop.y, w: crop.w, h: crop.h }; }
-
   function updateConfirmLeft() {
     const left = pendingCrops.filter(it => !it.done).length;
     autoEl.confirmSubmit.textContent = left ? `Klar (${left} kvar)` : 'Klar';
@@ -1217,71 +1254,76 @@
     const g = grabFrame();
     if (!g) { autoEl.result.textContent = 'Ingen bild'; autoEl.scanBtn.disabled = false; return; }
 
-    const maskData = brightMask(g.canvas, g.crop);
-    const card = detectNewestCard(maskData, g.crop);
-    if (!card) {
-      autoEl.result.textContent = `Inget kort detekterades (ljus ${Math.round((maskData.ratio || 0) * 100)}%). Öppna dialogen och klicka rätt kort i kortleken.`;
-      drawDebug(g, [], {});
-      openConfirmDialog(g.canvas, [{ box: cropBox(g.crop), sugg: [] }]);
-      autoEl.scanBtn.disabled = false;
-      return;
-    }
-
-    const q = cornerQuery(g.canvas, card);
-    const tops = topMatches(q, 3);
-    const match = matchCorner(q);
+    const maskData = buildMask(g.canvas, g.crop);
+    const rects = findCardRects(maskData);
     const notes = {};
-    let msg = '';
-    if (match) {
-      const [sid, rank] = match.key.split('-');
-      card.key = match.key;
-      const sName = SUITS.find(s => s.id === sid).name;
-      if (state.get(match.key)) {
-        msg = `${rankShort(rank)} ${sName} var redan spelat`;
+    const uncertain = [];
+    const msgs = [];
+
+    for (const r of rects) {
+      const q = cornerQuery(g.canvas, r);
+      const tops = topMatches(q, 3);
+      r.sugg = tops.map(t => t.key);
+      const best = tops[0];
+      if (best && best.score >= AUTO_OK) {
+        const [sid, rank] = best.key.split('-');
+        const label = `${rankShort(rank)} ${SUITS.find(s => s.id === sid).name}`;
+        if (state.get(best.key)) {
+          msgs.push(`${label} var redan spelat`);
+          notes[best.key] = 'redan spelad';
+        } else {
+          markCardPlayed(best.key);
+          updateCounters();
+          save();
+          playClick();
+          const m = `${label} markerad (${Math.round(best.score * 100)}%)`;
+          msgs.push(m);
+          notes[best.key] = m;
+        }
       } else {
-        markCardPlayed(match.key);
-        updateCounters();
-        save();
-        playClick();
-        msg = `${rankShort(rank)} ${sName} markerad (${Math.round(match.score * 100)}%)`;
+        r.key = 'u' + uncertain.length;
+        notes[r.key] = 'osäker';
+        uncertain.push({ box: r, sugg: r.sugg });
       }
-      notes[match.key] = msg;
-    } else {
-      card.key = '?';
-      notes['?'] = 'osäker';
-      msg = 'Kortet kändes inte igen – välj rätt kort i dialogen';
-      openConfirmDialog(g.canvas, [{ box: card, sugg: tops.map(t => t.key) }]);
     }
 
-    if (tops.length) {
-      const suggTxt = tops.map(t => {
-        const [si, r] = t.key.split('-');
-        return `${rankShort(r)} ${SUITS.find(x => x.id === si).name} (${Math.round(t.score * 100)}%)`;
-      }).join(', ');
-      msg += ` · Förslag: ${suggTxt}`;
+    if (!rects.length) {
+      msgs.push(`Inget helt kort hittades (ljus ${Math.round((maskData.ratio || 0) * 100)}%, tröskel ${maskData.thr})`);
+      uncertain.push({ box: { x: g.crop.x, y: g.crop.y, w: g.crop.w, h: g.crop.h }, sugg: [] });
     }
+
+    if (uncertain.length) openConfirmDialog(g.canvas, uncertain);
+
+    let msg = msgs.join(' · ') || 'Inget markerat';
+    if (uncertain.length) msg += ` · ${uncertain.length} osäkra – välj i dialogen`;
     autoEl.result.textContent = msg;
-    drawDebug(g, [card], notes);
+    drawDebug(g, rects, notes);
     autoEl.scanBtn.disabled = false;
+    logScan(g, maskData, rects, msg);
   }
 
   function showDebug() {
     if (!autoActive) return;
     const g = grabFrame();
     if (!g) return;
-    const maskData = brightMask(g.canvas, g.crop);
-    const card = detectNewestCard(maskData, g.crop);
-    if (card) {
-      const q = cornerQuery(g.canvas, card);
+    const maskData = buildMask(g.canvas, g.crop);
+    const rects = findCardRects(maskData);
+    const notes = {};
+    const parts = [];
+    rects.forEach((r, i) => {
+      r.key = 'r' + i;
+      const q = cornerQuery(g.canvas, r);
       const tops = topMatches(q, 3);
-      card.key = tops.length ? tops[0].key : '?';
-      drawDebug(g, [card], { [card.key]: tops.length ? `bäst ${Math.round(tops[0].score * 100)}%` : 'ingen match' });
-      autoEl.result.textContent = `Ruta: ${Math.round(card.w)}x${Math.round(card.h)}px, fyllnad ${Math.round(card.fill * 100)}%, ljus ${Math.round((maskData.ratio || 0) * 100)}%` +
-        (tops.length ? ` · ${tops.map(t => { const [si, r] = t.key.split('-'); return `${rankShort(r)} ${SUITS.find(x => x.id === si).name} (${Math.round(t.score * 100)}%)`; }).join(', ')}` : '');
-    } else {
-      drawDebug(g, [], {});
-      autoEl.result.textContent = `Inga kort i rutan (ljus ${Math.round((maskData.ratio || 0) * 100)}%) – rita ny ruta eller förstora`;
-    }
+      notes[r.key] = tops.length ? Math.round(tops[0].score * 100) + '%' : 'okänd';
+      parts.push(tops.length
+        ? tops.map(t => { const [si, rk] = t.key.split('-'); return `${rankShort(rk)} ${SUITS.find(x => x.id === si).name} ${Math.round(t.score * 100)}%`; }).join(', ')
+        : 'okänd');
+    });
+    drawDebug(g, rects, notes);
+    autoEl.result.textContent = rects.length
+      ? `Hittade ${rects.length} kort · ljus ${Math.round((maskData.ratio || 0) * 100)}%, tröskel ${maskData.thr} · ${parts.join(' | ')}`
+      : `Inga kort i rutan (ljus ${Math.round((maskData.ratio || 0) * 100)}%, tröskel ${maskData.thr})`;
+    logScan(g, maskData, rects, autoEl.result.textContent);
   }
 
   autoEl.drawBtn.addEventListener('click', () => autoEl.drawBtn.classList.toggle('active'));
@@ -1306,6 +1348,94 @@
       startAuto();
     }
   });
+
+  // --- Bildlogg: spara varje scannad bild (för finjustering mot riktig grafik) ---
+  let scanDirHandle = null;
+  function idbOpen() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open('trixScanLog', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('h');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  }
+  async function idbSet(key, val) {
+    try {
+      const db = await idbOpen();
+      await new Promise((res, rej) => {
+        const tx = db.transaction('h', 'readwrite');
+        tx.objectStore('h').put(val, key);
+        tx.oncomplete = res;
+        tx.onerror = () => rej(tx.error);
+      });
+    } catch (e) {}
+  }
+  async function idbGet(key) {
+    try {
+      const db = await idbOpen();
+      return await new Promise((res, rej) => {
+        const tx = db.transaction('h', 'readonly');
+        const rq = tx.objectStore('h').get(key);
+        rq.onsuccess = () => res(rq.result);
+        rq.onerror = () => rej(rq.error);
+      });
+    } catch (e) { return null; }
+  }
+  function updateLogBtn() {
+    autoEl.logBtn.textContent = scanDirHandle ? 'Bildlogg: På' : 'Bildlogg: Av';
+    autoEl.logBtn.classList.toggle('active', !!scanDirHandle);
+  }
+  async function ensureLogPermission() {
+    if (!scanDirHandle) return false;
+    try {
+      if (await scanDirHandle.queryPermission({ mode: 'readwrite' }) === 'granted') return true;
+      if (await scanDirHandle.requestPermission({ mode: 'readwrite' }) === 'granted') return true;
+    } catch (e) {}
+    scanDirHandle = null;
+    updateLogBtn();
+    return false;
+  }
+  async function enableScanLog() {
+    try {
+      scanDirHandle = await window.showDirectoryPicker({ id: 'trix-scans', mode: 'readwrite', startIn: 'desktop' });
+      await idbSet('dir', scanDirHandle);
+    } catch (e) { scanDirHandle = null; }
+    updateLogBtn();
+  }
+  async function restoreScanLog() {
+    const h = await idbGet('dir');
+    if (!h) return;
+    try {
+      if (await h.queryPermission({ mode: 'readwrite' }) === 'granted') scanDirHandle = h;
+    } catch (e) {}
+    updateLogBtn();
+  }
+  async function writeScanFile(name, blob) {
+    if (!scanDirHandle) return;
+    try {
+      const fh = await scanDirHandle.getFileHandle(name, { create: true });
+      const w = await fh.createWritable();
+      await w.write(blob);
+      await w.close();
+    } catch (e) {}
+  }
+  async function logScan(frame, maskData, rects, summary) {
+    if (!scanDirHandle) return;
+    if (!(await ensureLogPermission())) return;
+    const cropC = document.createElement('canvas');
+    cropC.width = frame.crop.w; cropC.height = frame.crop.h;
+    cropC.getContext('2d').drawImage(frame.canvas, frame.crop.x, frame.crop.y, frame.crop.w, frame.crop.h, 0, 0, cropC.width, cropC.height);
+    cropC.toBlob(b => b && writeScanFile('latest.png', b), 'image/png');
+    autoEl.debugCanvas.toBlob(b => b && writeScanFile('latest-marked.png', b), 'image/png');
+    const lines = [
+      summary,
+      `thr=${maskData.thr} ratio=${(maskData.ratio || 0).toFixed(3)} cw=${maskData.cw} ch=${maskData.ch}`,
+      ...rects.map((r, i) => `rect${i}: x=${Math.round(r.x)} y=${Math.round(r.y)} w=${Math.round(r.w)} h=${Math.round(r.h)} sugg=${(r.sugg || []).join(',')}`),
+    ];
+    writeScanFile('latest.txt', new Blob([lines.join('\n')], { type: 'text/plain' }));
+  }
+  autoEl.logBtn.addEventListener('click', enableScanLog);
+  restoreScanLog();
   // ---- PWA / install ----
   let deferredPrompt = null;
   const installBtn = document.getElementById('installBtn');
@@ -1333,11 +1463,11 @@
 
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
-    if (e.key.toLowerCase() === 'r' && !e.ctrlKey && !e.metaKey) {
+    if (e.key === 'R' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
       const t = e.target;
-      if (!t || t.tagName !== 'INPUT') resetAll();
+      if ((!t || t.tagName !== 'INPUT') && confirm('Återställa alla kort för ny runda?')) resetAll();
     }
-    if (e.key === 'F5') { e.preventDefault(); doScan(); }
+    if (e.key === 'F5' && autoActive) { e.preventDefault(); doScan(); }
     if (e.key === 'Escape') {
       autoEl.confirmDlg.classList.remove('open');
       autoEl.modal.classList.remove('open');

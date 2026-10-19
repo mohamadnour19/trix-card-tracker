@@ -12,7 +12,7 @@ Spåra och bocka av spelade kort i **Trix** under pågående spel – med ett en
 - **Varningar & färgstatus** – pulserande röd varning när en färg har ≤3 kort kvar, grön bock när en färg är avklarad
 - **Autosave** – leken sparas automatiskt och finns kvar efter stängning
 - **Ångra** – knapp eller `Ctrl+Z`
-- **Auto-läge (skärmavläsning av Jawaker)** – dela spel-fönstret, rita in stick-området, tryck `F5` efter varje stick så bockas korten av automatiskt (kräver https/localhost)
+- **Auto-läge (skärmavläsning av Jawaker)** – dela spel-fönstret, rita in stick-området, tryck `F5` efter varje spelat kort så bockas de helt synliga korten av automatiskt (kräver https/localhost)
 - **Rike-filter** – kombinera fokus på Hjärter Kung, Damer, Ruter eller Spader
 - **Highlights** – guldmarkering av Damer, röd markering av Hjärter Kung och Ruter-kort
 - **Ljud & animationer** – klickljud och flipp-animation (avstängningsbart)
@@ -28,7 +28,8 @@ Spåra och bocka av spelade kort i **Trix** under pågående spel – med ett en
 1. Öppna appen via **https** eller `http://localhost` (skärmdelning blockeras annars).
 2. Klicka **"Auto: Av"** och välj Jawaker-fönstret när webbläsaren frågar.
 3. Dra en ruta runt stick-området i mitten av bordet (sparas för nästa gång).
-4. Efter ett spelat kort (eller ett helt stick): tryck **`F5`** – appen känner igen det översta kortet och bokar av det. Vid osäkerhet frågar den vilket kort som spelades.
+4. Efter **varje** spelat kort: tryck **`F5`** – appen hittar de helt synliga korten i rutan och bokar av dem. Vid osäkerhet öppnas en dialog med bild + gula gissningsknappar.
+5. **Bildlogg** (valfritt): klicka **"Bildlogg: Av"**, välj en mapp – då sparas `latest.png`, `latest-marked.png` och `latest.txt` för varje scan så inställningarna kan finjusteras.
 
 ### Installera som Windows-app (PWA)
 
@@ -46,7 +47,7 @@ Spåra och bocka av spelade kort i **Trix** under pågående spel – med ett en
 | Tangent | Funktion |
 | --- | --- |
 | `Ctrl+Z` | Ångra senaste klick |
-| `R` | Återställ alla kort |
+| `Shift+R` | Återställ alla kort |
 | `F5` | Scanna sticket (i auto-läge) |
 
 ## Filstruktur
