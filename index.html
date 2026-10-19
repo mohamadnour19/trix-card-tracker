@@ -143,13 +143,16 @@
   .badge { font-size: .7rem; padding: 2px 8px; border-radius: 20px; background: var(--panel-light); color: var(--muted); }
 
   #confirmDlg .modal-box { max-width: 720px; }
-  .confirm-preview { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
-  .confirm-item { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 8px; background: var(--panel-light); }
-  .confirm-item img { width: 44px; height: 62px; object-fit: cover; border-radius: 4px; }
-  .confirm-item .choices { display: flex; flex-direction: column; gap: 4px; }
-  .confirm-item button { padding: 3px 8px; font-size: .78rem; border-radius: 6px; }
-  .confirm-item button.sugg { background: rgba(240,180,41,.3); color: #ffe9a8; font-weight: 700; }
+  .confirm-preview { display: flex; flex-direction: column; gap: 12px; }
+  .confirm-item { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 10px; background: var(--panel-light); }
+  .confirm-item img { width: 72px; height: 100px; object-fit: cover; border-radius: 6px; background: #000; flex: none; border: 1px solid #3a3f55; }
+  .confirm-item .choices { display: flex; flex-direction: column; gap: 8px; }
+  .confirm-item .choices .row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .confirm-item .choices .lbl { font-size: .74rem; color: var(--muted); }
+  .confirm-item button { padding: 6px 12px; font-size: .82rem; border-radius: 7px; }
+  .confirm-item button.sugg { background: rgba(240,180,41,.3); color: #ffe9a8; font-weight: 700; border: 1px solid var(--gold); }
   .confirm-item button.picked { background: var(--gold); color: #1a1d29; font-weight: 700; }
+  .confirm-item.active { outline: 2px solid var(--gold); }
   #confirmSubmit { background: var(--ok); color: #062c18; font-weight: 700; }
 
   .debug-canvas {
@@ -804,6 +807,7 @@
   let region = null;
   let drawState = null;
   let pendingCrops = [];
+  let activeItem = null;
   const TW = 40, TH = 52;
   const STD_RANKS = ['A', 'K', 'Q', 'J', '10', '9', '8', '7', '6', '5', '4', '3', '2'];
   const ourRank = (std) => std === 'A' ? 'Ess' : std === 'Q' ? 'D' : std === 'J' ? 'Kn' : std;
@@ -1150,6 +1154,12 @@
     autoEl.confirmSubmit.textContent = left ? `Klar (${left} kvar)` : 'Klar';
   }
 
+  function setActiveItem(it) {
+    activeItem = it || null;
+    if (!it) return;
+    pendingCrops.forEach(x => { if (x.el) x.el.classList.toggle('active', x === it); });
+  }
+
   function openConfirmDialog(src, items) {
     pendingCrops = items;
     autoEl.confirmPreview.innerHTML = '';
@@ -1158,12 +1168,15 @@
 
     const desc = document.createElement('div');
     desc.className = 'modal-hint';
-    desc.textContent = 'Klicka rätt kort för varje bild ovan. Gulmarkerade är appens bästa gissningar – annars välj i hela kortleken nedan.';
+    desc.textContent = 'Appen hittade ' + items.length + ' osäkra ' + (items.length === 1 ? 'kort' : 'kort') +
+      '. Tryck på den gula gissningen om den stämmer, annars väljer du rätt kort i hela kortleken nedan (gäller den markerade bilden).';
     autoEl.confirmPreview.appendChild(desc);
 
-    const wrap = document.createElement('div');
-    wrap.className = 'confirm-preview';
-    items.forEach((it) => {
+    const pickLabel = document.createElement('div');
+    pickLabel.className = 'modal-hint';
+    pickLabel.textContent = 'Hela kortleken:';
+
+    items.forEach((it, idx) => {
       const holder = document.createElement('div');
       holder.className = 'confirm-item';
       const img = document.createElement('img');
@@ -1172,6 +1185,14 @@
 
       const choices = document.createElement('div');
       choices.className = 'choices';
+
+      const lbl = document.createElement('div');
+      lbl.className = 'lbl';
+      choices.appendChild(lbl);
+
+      const row = document.createElement('div');
+      row.className = 'row';
+
       if (it.sugg && it.sugg.length) {
         it.sugg.forEach(key => {
           const [sid, rank] = key.split('-');
@@ -1181,21 +1202,31 @@
           b.textContent = `${rankShort(rank)} ${s.name}`;
           b.addEventListener('click', () => {
             markCardPlayed(key);
-            b.disabled = true;
-            b.style.opacity = '.35';
             playClick();
             updateCounters();
             save();
             it.done = true;
+            holder.classList.remove('active');
+            holder.style.opacity = '.45';
+            b.classList.add('picked');
+            lbl.textContent = 'Markerad: ' + b.textContent;
+            setActiveItem(items.find(x => !x.done));
             updateConfirmLeft();
           });
-          choices.appendChild(b);
+          row.appendChild(b);
         });
+      } else {
+        lbl.textContent = 'Ingen säker gissning';
       }
+      choices.appendChild(row);
       holder.appendChild(choices);
-      wrap.appendChild(holder);
+      holder.addEventListener('click', () => setActiveItem(it));
+      it.el = holder;
+      it.lbl = lbl;
+      autoEl.confirmPreview.appendChild(holder);
     });
-    autoEl.confirmPreview.appendChild(wrap);
+
+    autoEl.confirmPreview.appendChild(pickLabel);
 
     remainingKeysList().forEach(key => {
       const b = document.createElement('button');
@@ -1203,20 +1234,23 @@
       const s = SUITS.find(x => x.id === sid);
       b.textContent = `${rankShort(rank)} ${s.name}`;
       b.addEventListener('click', () => {
+        const it = items.find(x => x === activeItem) || items.find(x => !x.done);
+        if (!it) return;
         markCardPlayed(key);
-        b.disabled = true;
-        b.style.opacity = '.35';
         playClick();
         updateCounters();
         save();
-        const first = items.find(it => !it.done);
-        if (first) first.done = true;
+        it.done = true;
+        if (it.el) { it.el.classList.remove('active'); it.el.style.opacity = '.45'; }
+        if (it.lbl) it.lbl.textContent = 'Markerad: ' + b.textContent;
+        setActiveItem(items.find(x => !x.done));
         updateConfirmLeft();
       });
       autoEl.confirmPick.appendChild(b);
     });
 
     items.forEach(it => { it.done = false; });
+    setActiveItem(items[0]);
     updateConfirmLeft();
   }
 
