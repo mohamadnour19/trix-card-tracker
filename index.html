@@ -173,6 +173,35 @@
 
   .counters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 
+  .quick-entry {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    background: var(--panel);
+    border-radius: 10px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+  }
+  .quick-entry label { font-weight: 700; font-size: .85rem; }
+  .quick-entry input {
+    flex: 1 1 320px;
+    min-width: 220px;
+    font-size: 1.05rem;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid #3a3f55;
+    background: var(--panel-light);
+    color: var(--text);
+    letter-spacing: .5px;
+    font-family: inherit;
+  }
+  .quick-entry input:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 2px rgba(240,180,41,.25); }
+  .quick-entry input.err { border-color: #ff6b52; animation: shake .25s; }
+  .qe-help { font-size: .74rem; color: var(--muted); }
+  .qe-help b { color: var(--gold); }
+  @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
+
   .counter {
     background: var(--panel);
     border-radius: 10px;
@@ -411,6 +440,13 @@
       <button id="installBtn" hidden>Installera app</button>
     </div>
   </header>
+
+  <section class="quick-entry">
+    <label for="quickInput">Snabbinmatning:</label>
+    <input id="quickInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"
+      placeholder="t.ex.  S7 SK R3   (färg först: H/R/S/K, eller bara rank om färgen är samma)">
+    <span class="qe-help" id="qeHelp">Färg: H=♥ R=♦ S=♠ K=♣ · E=Ess D=Dam Kn=knekt · Enter = markera · Backspace = ångra sista</span>
+  </section>
 
   <section class="counters">
     <div class="counter total" id="counterTotal">
@@ -1490,13 +1526,104 @@
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
 
+  // ---- Snabbinmatning ----
+  const SUIT_KEYS = {
+    h: 'hearts', '\u2665': 'hearts', hearts: 'hearts', hj: 'hearts', hjarter: 'hearts', hj\u00e4rter: 'hearts',
+    r: 'diamonds', '\u2666': 'diamonds', diamonds: 'diamonds', ruter: 'diamonds', ru: 'diamonds',
+    s: 'spades', '\u2660': 'spades', spades: 'spades', spader: 'spades', sp: 'spades',
+    k: 'clubs', '\u2663': 'clubs', clubs: 'clubs', kl: 'clubs', klover: 'clubs', kl\u00f6ver: 'clubs',
+  };
+  const RANK_KEYS = {
+    'e': 'Ess', 'a': 'Ess', 'ess': 'Ess', 'ace': 'Ess', '1': 'Ess', '14': 'Ess',
+    'k': 'K', 'kung': 'K', 'king': 'K', '13': 'K',
+    'd': 'D', 'dam': 'D', 'queen': 'D', 'q': 'D', '12': 'D',
+    'kn': 'Kn', 'j': 'Kn', 'knekt': 'Kn', 'jack': 'Kn', '11': 'Kn',
+    '10': '10', '9': '9', '8': '8', '7': '7', '6': '6', '5': '5', '4': '4', '3': '3', '2': '2',
+  };
+  const quickInput = document.getElementById('quickInput');
+  const qeHelp = document.getElementById('qeHelp');
+
+  function parseCardToken(str, suitCtx) {
+    const s = String(str).toLowerCase().trim().replace(/\s+/g, '');
+    if (!s) return null;
+    const exactSuit = SUIT_KEYS[s];
+    const bareRank = RANK_KEYS[s];
+    if (exactSuit && bareRank === undefined) return { rank: null, suit: exactSuit };
+    if (s.length === 1 && exactSuit && bareRank !== undefined && !suitCtx) return { rank: null, suit: exactSuit };
+    let rank = null, cut = 0;
+    for (let len = Math.min(5, s.length); len >= 1; len--) {
+      const cand = s.slice(s.length - len);
+      if (RANK_KEYS[cand] !== undefined) { rank = RANK_KEYS[cand]; cut = len; break; }
+    }
+    if (rank === null) return null;
+    const suitPart = s.slice(0, s.length - cut).trim();
+    let tokenSuit = null;
+    if (suitPart) tokenSuit = SUIT_KEYS[suitPart] || SUIT_KEYS[suitPart[0]];
+    return { rank, suit: tokenSuit };
+  }
+
+  function quickFlashError(msg) {
+    quickInput.classList.remove('err');
+    void quickInput.offsetWidth;
+    quickInput.classList.add('err');
+    qeHelp.innerHTML = msg;
+    setTimeout(() => {
+      qeHelp.innerHTML = 'F\u00e4rg: H=\u2665 R=\u2666 S=\u2660 K=\u2663 \u00b7 E=Ess D=Dam Kn=knekt \u00b7 Enter = markera \u00b7 Backspace = \u00e5ngra sista';
+    }, 2200);
+  }
+
+  function quickCommit() {
+    const text = quickInput.value.trim();
+    if (!text) return;
+    const tokens = text.split(/[\s,;/|]+/).filter(Boolean);
+    let suitCtx = null;
+    const toMark = [];
+    for (const tk of tokens) {
+      const p = parseCardToken(tk, suitCtx);
+      if (!p) { quickFlashError('Kunde inte tolka: <b>' + tk + '</b>'); return; }
+      if (p.suit) suitCtx = p.suit;
+      if (p.rank === null) continue;
+      if (!suitCtx) { quickFlashError('Ange f\u00e4rg f\u00f6rst, t.ex. <b>S7</b> eller <b>S 7</b>'); return; }
+      const key = suitCtx + '-' + p.rank;
+      if (!state.has(key)) { quickFlashError('Finns inget s\u00e5dant kort: <b>' + tk + '</b>'); return; }
+      toMark.push(key);
+    }
+    if (!toMark.length) return;
+    for (const key of toMark) {
+      if (state.get(key)) continue;
+      state.set(key, true);
+      const card = document.querySelector(`.card[data-key="${key}"]`);
+      if (card) { card.classList.add('played', 'flip'); }
+      history.push(key);
+    }
+    while (history.length > 200) history.shift();
+    playClick();
+    updateCounters();
+    save();
+    quickInput.value = '';
+  }
+
+  quickInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      quickCommit();
+    } else if (e.key === 'Backspace' && quickInput.value === '') {
+      e.preventDefault();
+      undo();
+    } else if (e.key === 'Escape') {
+      quickInput.value = '';
+    }
+  });
+
   // ---- Wiring ----
   document.getElementById('resetBtn').addEventListener('click', resetAll);
   undoBtn.addEventListener('click', undo);
   filterButtons.forEach(b => b.addEventListener('click', () => onFilterClick(b)));
 
   document.addEventListener('keydown', (e) => {
+    if (e.target === quickInput) return;
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
+    if (e.key === ' ') { e.preventDefault(); quickInput.focus(); }
     if (e.key === 'R' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
       const t = e.target;
       if ((!t || t.tagName !== 'INPUT') && confirm('Återställa alla kort för ny runda?')) resetAll();

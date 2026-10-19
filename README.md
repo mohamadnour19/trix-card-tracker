@@ -7,6 +7,7 @@ Spåra och bocka av spelade kort i **Trix** under pågående spel – med ett en
 ## Funktioner
 
 - **52 kort i 4 färggrupper** – Hjärter, Ruter, Spader och Klöver (2 till Ess) i pokerstil
+- **Snabbinmatning** – skriv spelade kort på en rad (`S7 SK R3`) och tryck Enter – snabbast när spelet går fort
 - **Ett-klicksavbockning** – spelat kort blir nedtonat och överstruket direkt
 - **Live-räknare** – hur många kort som återstår totalt och per färg, med progressbar
 - **Varningar & färgstatus** – pulserande röd varning när en färg har ≤3 kort kvar, grön bock när en färg är avklarad
@@ -42,10 +43,24 @@ Spåra och bocka av spelade kort i **Trix** under pågående spel – med ett en
 2. Öppna [http://localhost:8080](http://localhost:8080) i Chrome eller Edge.
 3. Klicka på *installera*-ikonen i adressfältet (eller `Installera app`-knappen när den visas).
 
+## Snabbinmatning
+
+Skriv in spelade kort direkt i fältet **Snabbinmatning** i stället för att klicka – snabbast när spelet går fort:
+
+- Färg först: `H`=♥ `R`=♦ `S`=♠ `K`=♣ (eller `spader`, `klöver`, ♠ …)
+- Rank: `E`/`A`=Ess, `K`=Kung, `D`=Dam, `Kn`/`J`=knekt, `10`–`2`
+- Exempel: `S7 SK R3` = Spader 7, Spader Kung, Ruter 3
+- Samma färg flera kort: `S 7 K 3` (färgen gäller tills du byter)
+- Tryck **Enter** för att markera alla · **Backspace** i tomt fält = ångra sista
+- **Mellanslag** hoppar till fältet var som helst ifrån
+
 ## Genvägar
 
 | Tangent | Funktion |
 | --- | --- |
+| `Mellanslag` | Fokusera snabbinmatningen |
+| `Enter` | Markera korten i fältet |
+| `Backspace` (tomt fält) | Ångra senaste kort |
 | `Ctrl+Z` | Ångra senaste klick |
 | `Shift+R` | Återställ alla kort |
 | `F5` | Scanna sticket (i auto-läge) |
